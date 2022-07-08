@@ -16,6 +16,36 @@ em2 = tf.constant(1021.9979, dtype=tf.float32)
 # Planck's constant * speed of light
 hc = tf.constant(12.3984244, dtype=tf.float32)
 
+# @tf.function
+def interp2dcomplex(y_cpx=None, y_amp=None, y_phase=None, out_size=[64,64], output='complex'):
+    '''
+    Interpolate complex data
+    Input:
+        y_cpx: complex data
+        or
+        y_amp: amplitude data
+        y_phase: phase data
+        out_size: output size
+        output: 'complex' or 'real'
+    Output:
+        y_cpx: interpolated complex data
+        or
+        y_amp: interpolated amplitude data
+        y_phase: interpolated phase data
+    '''
+    if y_cpx is None:
+        assert y_amp is not None and y_phase is not None
+        y_cpx = tf.cast(y_amp, tf.complex64) * tf.exp(1j*tf.cast(y_phase, tf.complex64))
+    else:
+        assert(y_cpx.dtype == tf.complex64)
+    y_cpx = y_cpx[tf.newaxis,..., tf.newaxis]
+    re = tf.image.resize(tf.math.real(y_cpx), out_size)
+    im = tf.image.resize(tf.math.imag(y_cpx), out_size)
+    cpx = tf.squeeze(tf.complex(re, im))
+    if output=='complex':
+        return cpx
+    else:
+        return tf.math.abs(cpx), tf.math.angle(cpx)
 
 def fft2d(A):
     """2D FFT using numpy"""
@@ -30,7 +60,7 @@ def ifft2d(A):
 @tf.function
 def tf_fft2d(two_d_array):
     """2D Fourier Transform using tensorflow"""
-    return tf.signal.fftshift(tf.signal.fft2d(tf.signal.fftshift(two_d_array)))
+    return tf.signal.fftshift(tf.signal.fft2d(tf.signal.ifftshift(two_d_array)))
 
 
 @tf.function
@@ -47,7 +77,7 @@ def tf_fft2d_A_p(A_p: tf.Tensor, complex_out:tf.bool=False) -> tf.Tensor:
     A_p[:, :, 1] = phase
     """
     A_p = tf_cast_complex(A_p[..., 0], A_p[..., 1])
-    A_p = tf.signal.fftshift(tf.signal.fft2d(tf.signal.fftshift(A_p)))
+    A_p = tf.signal.fftshift(tf.signal.fft2d(tf.signal.ifftshift(A_p)))
 
     if complex_out:
         return A_p
@@ -304,9 +334,9 @@ def tf_switch_space(wave, space="k"):
     """
     amp = tf.maximum(0.0, tf.math.abs(wave))
     if space == "r":
-        wave_new = tf.signal.fftshift(tf.signal.fft2d(tf.signal.fftshift(wave)))
+        wave_new = tf_fft2d(wave)
     elif space == "k":
-        wave_new = tf.signal.fftshift(tf.signal.ifft2d(tf.signal.ifftshift(wave)))
+        wave_new = tf_ifft2d(wave)
     amp_new = tf.abs(wave_new)
     amp_new *= tf.reduce_sum(amp) / tf.reduce_sum(amp_new)
     phase_new = tf.math.angle(wave_new)
@@ -343,12 +373,12 @@ def tf_binary_mask(probe_k:tf.Tensor, threshold:float = 0.5) -> tf.Tensor:
         amp_max = tf.reduce_max(amp)
         
     amp_threshold = amp_max * threshold
-    mask = tf.where(amp > amp_threshold, 1.0, 0.0)
+    mask = tf.where(amp >= amp_threshold, 1.0, 0.0)
     return mask
 
 
 @tf.function
-def pred_dict(y_tensor):
+def pred_dict(y_tensor, btw_filt=None):
     """
     create a dictionary of predicted results for use in differnt metrics and loss functions, using tensorflow.
     Input:
@@ -369,22 +399,25 @@ def pred_dict(y_tensor):
     y_tensor = tf.where(tf.math.is_nan(y_tensor), tf.zeros_like(y_tensor), y_tensor)
 
     k["amp_sc"], k["sin"], k["cos"] = tf.unstack(y_tensor, axis=-1)
-    k["amp"] = k["amp_sc"] ** 5
+    k["amp"] = tf.math.pow(k["amp_sc"],5)
+    # if btw_filt is not None:
+    #     k["amp"] *= btw_filt
     k["phase"] = tf_sin_cos2rad(k["sin"], k["cos"])
     kw = tf_cast_complex(k["amp"], k["phase"])
-    k["int"] = tf.math.abs(kw) ** 2
+    k["int"] = tf.math.pow(tf.math.abs(kw),2)
     k["r"] = tf.math.real(kw)
     k["i"] = tf.math.imag(kw)
 
     r["amp"], r["phase"] = tf_switch_space(kw, space="k")
     r["sin"], r["cos"] = tf_sin_cos_decomposition(r["phase"])
     r["wv"] = tf_cast_complex(r["amp"], r["phase"])
-    r["int"] = tf.math.abs(r["wv"]) ** 2
+    r["int"] = tf.math.abs(tf.math.pow(r["wv"],2))
     r["r"] = tf.math.real(r["wv"])
     r["i"] = tf.math.imag(r["wv"])
     
     r["amp"] = tf.where(tf.math.is_nan(r["amp"]), tf.zeros_like(r["amp"]), r["amp"])
-    r["amp_sc"] = r["amp"]**0.2
+    r["int"] = tf.where(tf.math.is_nan(r["int"]), tf.zeros_like(r["int"]), r["int"])
+    r["amp_sc"] = tf.math.pow(r["amp"],0.2)
 
     return r, k
 
@@ -425,6 +458,7 @@ def true_dict(y_tensor):
     r["r"] = tf.math.real(rw)
     r["i"] = tf.math.imag(rw)
     r["obj"] = tf.math.angle(rw/r["probe"])
+    r["obj"] = tf.where(tf.math.is_nan(r["obj"]), tf.zeros_like(r["obj"]), r["obj"])
     r["amp_sc"] = r["amp"] ** 0.2
     
     return r, k
@@ -444,7 +478,7 @@ def tf_com(images):
     # Make array of coordinates (each row contains three coordinates)
     jj, kk = tf.meshgrid(tf.range(nx), tf.range(ny), indexing="ij")
     coords = tf.stack([tf.reshape(jj, (-1,)), tf.reshape(kk, (-1,))], axis=-1)
-    coords = tf.cast(coords, floatx)
+    coords = tf.cast(coords, images.dtype)
     # Rearrange input into one vector per volume
     images_flat = tf.reshape(images, [-1, nx * ny, 1])
     # Compute total mass for each volume
@@ -546,21 +580,19 @@ def tf_FourierShift2D(x: tf.Tensor, delta: tf.Tensor) -> tf.Tensor:
         ),
         [B, 1],
     )
-
+    pi2 = 2 * tf.cast(tf_pi, delta.dtype)
     pi_delta_x = tf.cast(
-        2
-        * tf_pi
+        pi2
         * tf.broadcast_to(delta[:, 0, tf.newaxis], tf.shape(x_arr))
-        * tf.cast(x_arr, floatx)
-        / tf.cast(N, floatx),
+        * tf.cast(x_arr, delta.dtype)
+        / tf.cast(N, delta.dtype),
         tf.complex64,
     )
     pi_delta_y = tf.cast(
-        2
-        * tf_pi
+        pi2
         * tf.broadcast_to(delta[:, 1, tf.newaxis], tf.shape(y_arr))
-        * tf.cast(y_arr, floatx)
-        / tf.cast(M, floatx),
+        * tf.cast(y_arr, delta.dtype)
+        / tf.cast(M, delta.dtype),
         tf.complex64,
     )
     y_shift = tf.exp(-1j * pi_delta_x)
@@ -622,8 +654,8 @@ def tf_butterworth_filter2D(im_size, cutoff, order=5, shape="ci"):
     order2 = 2 * order
     cutoff2 = cutoff / 2
     [x, y] = tf.meshgrid(
-        (tf.range(0, co) - int(tf.experimental.numpy.fix(co / 2) + 1)) / co,
-        (tf.range(0, rw) - int(tf.experimental.numpy.fix(rw / 2) + 1)) / rw,
+        (tf.range(0, co) - int(tf.experimental.numpy.fix(co / 2))) / co,
+        (tf.range(0, rw) - int(tf.experimental.numpy.fix(rw / 2))) / rw,
     )
     if shape == "sq":  # Squared filter window
         fx = 1 + (x / cutoff2) ** order2

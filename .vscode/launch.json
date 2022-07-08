@@ -1,0 +1,19 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": [
+                "--model_name","dbg2","--gpu_id","1","--arch","UNET","--db_path","/media/thomas/SSD/Data_64","--lr","1e-5","--normalization","3","--activation","5","--loss_prms_k","1","2","5","1","1","1","0",
+            ],
+            "justMyCode": true
+        }
+    ]
+}

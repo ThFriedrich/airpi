@@ -10,7 +10,7 @@ def fcn_train(prms_o, prms_net, NET):
 
     model = NET(training_ds._flat_shapes[0][1:4], prms_net).build()
 
-    tb_freq = 1024 // prms_o['batch_size']
+    tb_freq = 4
     if os.path.isfile(os.path.join(prms_o['cp_path'], 'checkpoint')) is True:
         model.load_weights(prms_o['cp_path'] + '/cp-best.ckpt')
         print('Epoch and Learning Rate loaded from Epoch ' + str(prms['ep']))
@@ -19,11 +19,11 @@ def fcn_train(prms_o, prms_net, NET):
     metric_fcn = ls.metric_fcns(prms_o, model)
   
     model.compile(
-        # optimizer=optimizers.SGD(prms_o['learning_rate'], nesterov=True), loss=loss_fcn, metrics=[metric_fcn])
+        # optimizer=optimizers.SGD(prms_o['learning_rate']), loss=loss_fcn, metrics=[metric_fcn])
         # optimizer=optimizers.Nadam(prms_o['learning_rate']),loss=loss_fcn, metrics=[metric_fcn])
         optimizer=optimizers.Adam(prms_o['learning_rate']),loss=loss_fcn, metrics=[metric_fcn])
        
-
+    
     callbacks = airpi_callbacks(prms_o, prms_net, tb_freq, 1, tb_freq).as_list
 
     from tensorflow.data.experimental import AUTOTUNE
@@ -48,44 +48,49 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     # parse arguments
-    parser.add_argument('--model', type=str, help='Model Name')
+    parser.add_argument('--model_name', type=str, help='Model Name')
     parser.add_argument('--arch', type=str, help='Architecture: UNET or COMPLEX')
     parser.add_argument('--filters', type=int, help='UNET filters')
     parser.add_argument('--depth', type=int, help='UNET levels')
     parser.add_argument('--stack_n', type=int, help='UNET conv layers per stack')
     parser.add_argument('--db_path', type=str, help='path to datasets')
-    parser.add_argument('--r_weights', type=float, nargs=6, help='weight factors [px_p, px_a, px_pw, px_int, obj]') # the first parameter decide whether use data in r space for training, the rests specifies the weight
-    parser.add_argument('--k_weights', type=float, nargs=7, help='weight factors [px_p, px_a, px_pw, px_int, int_tot, df_ratio]') # the first parameter decide whether use data in k space for training, the rests specifies the weight
+    parser.add_argument('--loss_prms_r', type=float, nargs=6, help='weight factors [px_p, px_a, px_pw, px_int, obj]') # the first parameter decide whether use data in r space for training, the rests specifies the weight
+    parser.add_argument('--loss_prms_k', type=float, nargs=7, help='weight factors [px_p, px_a, px_pw, px_int, int_tot, df_ratio]') # the first parameter decide whether use data in k space for training, the rests specifies the weight
     parser.add_argument('--bs', type=int, help='Batch Size')
     parser.add_argument('--lr', type=float, help='Learning Rate')
     parser.add_argument('--dose', type=float, nargs=3, help='Dose (logspace(a,b)*c)')
     parser.add_argument('--gpu_id', type=int, help='gpu index')
-    parser.add_argument('--debug', type=bool, help='run in debug mode')
     parser.add_argument('--branching', type=int, help='For UNET only branching 0, 1 or 2')
     parser.add_argument('--normalization', type=int, help='For UNET only, 0 = None, 1 = instance, 2 = layer else Batch')
-    parser.add_argument('--activation', type=int, help='For UNET only 0 = None, 1 = LeakyReLU, 2 = ELU, 3 = SWISH , 4 = Sigmoid 7 = Group else ReLu')
+    parser.add_argument('--activation', type=int, help='For UNET only 0 = None, 1 = LeakyReLU, 2 = ELU, 3 = SWISH , 4 = Sigmoid else ReLu')
     parser.add_argument('--type', type=str, help='For UNET only V=Vanilla, RES=Residual, DCR=Dense-Conv-Residual')
+    parser.add_argument('--epochs', type=int, help='Epochs to train')
+    parser.add_argument('--ep', type=int, help='Epoch to start from')
+    parser.add_argument('--epochs_cycle_1', type=int, help='Epochs to train for cycle 1')
+    parser.add_argument('--epochs_cycle', type=int, help='Epochs to train for all other cycles')
+    parser.add_argument('--sample_dir', type=str, help='Directory containing sample datasets')
     args = vars(parser.parse_args())
+
+    if args["gpu_id"] is None:
+        args["gpu_id"] = 1
     
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-
-    from tensorflow import config as tf_config
-    devices = tf_config.list_physical_devices('GPU')
-    tf_config.experimental.set_memory_growth(devices[0], True)
-    
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args['gpu_id'])
 
-    from ap_utils.util_fcns import debugger_is_active, manage_args
+    from tensorflow import config as tf_config
 
-    tf_config.run_functions_eagerly(debugger_is_active())
+    # physical_devices = tf_config.experimental.list_physical_devices('GPU')
+    # if len(physical_devices) > 0:
+    #     tf_config.experimental.set_memory_growth(physical_devices[0], True)
+
+    from ap_utils.util_fcns import debugger_is_active, manage_args
+    prms, prms_net = manage_args(args) 
 
     from tensorflow.keras import mixed_precision, optimizers
-    # from tensorflow.config import optimizer
-    prms, prms_net = manage_args(args)
     
     # mixed_precision.set_global_policy('mixed_float16')
-    mixed_precision.set_global_policy('float32')
-    # optimizer.set_jit(True)
+    # mixed_precision.set_global_policy('float32')
+    tf_config.optimizer.set_jit("autoclustering")
    
 
     from ap_training.data_fcns import getDatasets
@@ -95,6 +100,8 @@ if __name__ == '__main__':
     elif prms_net['arch'] == 'COMPLEX':
         from ap_architectures.complex_net import CNET as NET
     import ap_training.losses as ls
+
+    tf_config.run_functions_eagerly(debugger_is_active())
 
     fcn_train(prms, prms_net, NET)
 

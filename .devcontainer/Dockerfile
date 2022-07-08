@@ -41,26 +41,32 @@ CMD [ "sleep", "infinity" ]
 
 # Install additional OS packages.
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
-    && apt-get -y install --no-install-recommends nano htop screen git python3-tk cmake libgl1 libncurses5-dev libncursesw5-dev nvidia-utils-510 libhdf5-mpi-dev && \
+    && apt-get -y install --no-install-recommends nano htop screen git python3-tk cmake libgl1 libncurses5-dev libncursesw5-dev libhdf5-mpi-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # Setup hd5 to usi mpi
 ENV CC=mpicc
 ENV HDF5_MPI="ON"
 
+# Set default locale to en_US.UTF-8
+ENV LANG en_US.UTF-8  
+ENV LANGUAGE en_US:en  
+ENV LC_ALL en_US.UTF-8
+
 RUN pip install --no-binary=h5py h5py
 RUN pip install matplotlib
 RUN pip install scikit-image
-RUN pip install joblib
+# RUN pip install joblib
 RUN pip install pylint
 RUN pip install ipykernel
 RUN pip install --upgrade tensorflow-addons
 RUN pip install silence_tensorflow
-RUN pip install pixstem
-RUN pip install "dask[array]" --upgrade
+# RUN pip install pixstem
+# RUN pip install "dask[array]" --upgrade
 RUN pip install nvidia-ml-py3
 RUN pip install tf-complex
-RUN pip install opencv-python
+RUN pip install tqdm
+# RUN pip install opencv-python
 
 # Preserve command history
 RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
@@ -69,10 +75,3 @@ RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhisto
     && chown -R ${USERNAME} /commandhistory \
     && echo $SNIPPET >> "/home/${USERNAME}/.bashrc"
 
-# Built nvtop
-RUN cd "/home/${USERNAME}" && \
-    git clone --single-branch https://github.com/Syllo/nvtop.git && \
-    mkdir -p nvtop/build && \
-    cd nvtop/build && \
-    cmake .. && \
-    make install
