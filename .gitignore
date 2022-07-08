@@ -1,0 +1,8 @@
+Logs
+Images
+Data_64
+Ckp
+*.pyc
+Scripts/**
+*.png
+*.svg
