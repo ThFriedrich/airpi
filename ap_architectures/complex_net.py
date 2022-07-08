@@ -1,39 +1,33 @@
-import airpi.ap_training.losses as ls
+import ap_training.losses as ls
 from copy import copy
 import tensorflow as tf
-from airpi.ap_architectures.utils import tf_pi_32, fcn_rad_CS, PRM, floatx, tf_butterworth_filter2D
+from ap_architectures.utils import tf_pi, tf_sin_cos2rad
+from ap_utils.util_fcns import PRM
 from tensorflow.signal import ifft2d, fftshift, ifftshift
 import tensorflow.keras.layers as kl 
 from tensorflow.keras import Model
 from tf_complex.convolutions import ComplexConv2D
 from tensorflow import keras as tfk
 kl = tfk.layers
-
+from ap_architectures.bn import ComplexBatchNormalization
 class CNET():
     # Derived from https://arxiv.org/abs/2004.01738
-    def __init__(self, x_shape, prms, scaled_out_size=None):
+    def __init__(self, x_shape, prms):
 
         # Architecture parameters
         self.x_shape = copy(x_shape)
-        if 'predict' in prms and prms['predict']:
-            # self.x_shape = self.x_shape.as_list()
+        if 'deploy' in prms and prms['deploy']:
             self.deploy = True
-            if scaled_out_size is None: scaled_out_size = x_shape[0]
-            self.pad = int(scaled_out_size - x_shape[0]) // 2
-            self.btw_filter = tf.expand_dims(tf.cast(tf_butterworth_filter2D(
-                [scaled_out_size, scaled_out_size], 0.025, order=12, shape='ci'), tf.complex64), -1)
         else:
             self.deploy = False
-            if prms['bin_mask']:
-                self.x_shape[2] += PRM.mask_num
 
         self.type = prms['type']
         self.kernel = prms['kernel']
         self.filters = prms['filters']
         self.depth = prms['depth']
         self.normalization = int(prms['normalization'])
-        self.activation = prms['activation']
-        self.stack_n = prms['conv_stack_n']
+        self.activation = 'cardioid'
+        self.stack_n = prms['stack_n']
         # Regularization parameters
 
     def flatten(self, x: tf.Tensor) -> tf.Tensor:
@@ -43,50 +37,76 @@ class CNET():
         x_mean, x_var = tf.nn.moments(x, axes=[1, 2, 3], keepdims=True)
         x_std = tf.maximum(tf.sqrt(x_var), 1e-8)
         x = tf.divide(tf.subtract(x, x_mean), x_std)
-        return x_mean, x_std, x
+
+        return x, x_mean, x_std
+
 
     def x_normalise(self, x: tf.Tensor) -> tf.Tensor:
         # xf = self.flatten(xf)
-        x_mean, x_std, xf = self.standardize(self.flatten(x[..., 0:9]))
-        xf = tf.cast(xf, tf.complex64)
+        xf, x_mean, x_std = self.standardize(self.flatten(x[..., 0:9]))
         if x.shape[-1] > 9:
-            xp = tf.cast(x[..., 9:], tf.complex64)
-            self.probe = xp[..., 0]*tf.exp(1j*xp[..., 1])
-            xf = tf.concat((xf, self.probe[...,tf.newaxis]), -1)
+            msk_a = self.standardize(tf.expand_dims(x[..., 9], -1))
+            xf = tf.concat((xf, msk_a[0]), -1)
+        if x.shape[-1] > 10:
+            msk_p = self.standardize(
+                tf.stack((tf.sin(x[..., 10]), tf.cos(x[..., 10])), -1))
+            xf = tf.concat((xf, msk_p[0]), -1)
         return x_mean, x_std, xf
 
 
     # Input Layer
     def input_block(self):
         x0 = kl.Input(
-            shape=(self.x_shape[0], self.x_shape[1], self.x_shape[2]), name='cbeds', dtype=floatx)
+            shape=(self.x_shape[0], self.x_shape[1], self.x_shape[2]), name='cbeds')
         x = x0
         # if self.deploy:
         # x = tf.image.resize(x, [64, 64])
         x_mean, x_std, x = self.x_normalise(x)
-
-        return x_mean, x_std, x, x0
+        x_mean2 = tf.math.reduce_mean(x0)
+        return x_mean, x_std, x, x0, x_mean2
 
     def output_amplitude(self, x):
         x = ComplexConv2D(2, self.kernel, padding='same', activation='linear')(x)
-        return tf.math.abs(x)
+        x = tf.math.abs(x) * 1e-3
+        # x = tf.math.abs(x)
+        # x = tfk.activations.sigmoid(x)
+        return x
 
     def output_phase(self, x):
         x = ComplexConv2D(2, self.kernel, padding='same', activation='linear')(x)
         x = tf.math.angle(x)
         return x, tf.sin(x), tf.cos(x)
 
+    def complex2real(self,x):
+        x_real = tf.math.real(x)
+        x_imag = tf.math.imag(x)
+        return tf.concat([x_real,x_imag], axis=-1)
+
+    def real2complex(self, x):
+        channel = x.shape[-1] // 2
+        if x.shape.ndims == 3:
+            return tf.complex(x[:,:,:channel], x[:,:,channel:])
+        elif x.shape.ndims == 4:
+            return tf.complex(x[:,:,:,:channel], x[:,:,:,channel:])
+
+    def conv_norm_layer(self, x, nf, strides=[1,1]):
+        x = ComplexConv2D(nf, self.kernel, strides=strides, padding='same', activation=self.activation)(x)
+        if self.normalization == 1:
+            x = ComplexBatchNormalization()(x)
+        return x
+
     def conv_stack(self, x):
         nf = x.shape[-1]*2
         for _ in range(self.stack_n):
-            x = ComplexConv2D(nf, self.kernel, padding='same', activation=self.activation)(x)
+            x = self.conv_norm_layer(x, nf)
         return x
 
     def down_block(self,x):
         nf = x.shape[-1]
-        fct = 2
         sk = self.conv_stack(x)
-        x = ComplexConv2D(nf*fct*2, self.kernel, strides=[fct,fct], padding='same', activation=self.activation)(sk)
+        x = self.conv_norm_layer(sk, nf*4, strides=[2,2])
+        # x = ComplexConv2D(nf*fct*2, self.kernel, strides=[2,2], padding='same', activation=self.activation)(sk)
+
         return x, sk
 
     def up_block(self, x, x_skip):
@@ -101,14 +121,20 @@ class CNET():
     def ifft2d(self, array):
         return fftshift(ifft2d(ifftshift(array[..., 0])))
 
+    def deploy_out(self, x_i, x_p):
+        x_i = tf.cast(x_i**5, tf.complex64)
+        x_p = tf.cast(x_p, tf.complex64)
+        x_o = (x_i * tf.exp(1j*x_p))
+        return x_o
+
     def build(self):
 
         nf = self.depth -1
 
-        x_mean, x_std, x, x0 = self.input_block()
+        x_mean, x_std, x, x0, x_mean2 = self.input_block()
         skips = []
 
-        x = ComplexConv2D(self.filters*2, self.kernel, padding='same', activation='crelu')(x)
+        x = ComplexConv2D(self.filters*2, self.kernel, padding='same', activation=self.activation)(x)
         for _ in range(nf):
             x, sk = self.down_block(x)
             skips.append(sk)
@@ -116,31 +142,17 @@ class CNET():
         for ix in range(nf):
             x = self.up_block(x, skips[-(ix+1)])
 
-        # x_i = self.output_amplitude(x)
-        # x_p, x_s, x_c = self.output_phase(x)
-        x_o = ComplexConv2D(2, self.kernel, padding='same', activation='linear')(x)
-        # x_o = kl.layers.Concatenate([tf.math.real(x_o), tf.math.imag(x_o)])
-        x_o = tf.concat([tf.math.real(x_o), tf.math.imag(x_o)], -1)
+        x_i = self.output_amplitude(x)
+        x_p, x_s, x_c = self.output_phase(x)
+
         if self.deploy:
-            x_o = tf.complex(x_o[..., 0], x_o[..., 1])
-            # x_i = tf.math.add(x_mean,x_i)**5
-            # x_i = (x_i/x_mean)**5
-            # x_i = (tf.maximum(0.00, tf.math.add(x_mean,x_i)))**5
-            # x_i = tf.cast(x_i, tf.complex64)
-            # x_p = tf.cast(x_p, tf.complex64)
-            # x_o = x_i * tf.exp(1j*x_p)
-            # x_o = tf.where(tf.abs(self.probe[...,tf.newaxis])>0,x_o,0)
-            # x_o = self.oversample(x_o)
-            # x_o *=  self.btw_filter
-            # x_o = self.ifft2d(x_o)
-            # x_o = tfk.layers.Concatenate(dtype=tf.float32)((x_i, x_p))
+            x_o = self.deploy_out(x_i, x_p)
             pos = kl.Input(shape=(2), dtype=tf.int32, name='pos')
             model = Model(inputs=[x0, pos], outputs=[x_o, pos])
         else:
-            # x_o = kl.Concatenate(dtype=tf.float32)((x_i, x_s, x_c))
+            x_o = kl.Concatenate(dtype=tf.float32)((x_i, x_s, x_c))
             model = Model(inputs=x0, outputs=x_o)
-
-        model.summary()
+            model.summary()
 
         return model
 
