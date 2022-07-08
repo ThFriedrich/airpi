@@ -27,47 +27,42 @@ def reconstruct_ds(ds_path, key, prms_net, rec_prms, skip=1, dose=None, save=Fal
 
 
 def get_model_ckp(cp_path):
-    _, prms_net = load_obj(os.path.join(cp_path, "hyperparameters.txt"))
+    hp_file = os.path.join(cp_path, "hyperparameters.pickle")
+    _, prms_net = load_hparams(hp_file)
     prms_net["cp_path"] = cp_path
-    prms_net["predict"] = True
+    prms_net["deploy"] = True
     return prms_net
 
 
 if __name__ == "__main__":
     os.system("clear")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dose", type=int, default=0, help="Dose")
-    parser.add_argument("--ds", type=int, default=0, help="Dataset")
-    parser.add_argument("--step", type=int, default=1, help="Step skip")
-    parser.add_argument("--gpu_id", type=int, default=0, help="GPU")
+    parser.add_argument("--dose", type=int, default=1000, help="Dose")
+    parser.add_argument("--ds", type=int, default=1, help="Dataset")
+    parser.add_argument("--step", type=int, default=4, help="Step skip")
+    parser.add_argument("--gpu_id", type=int, default=1, help="GPU")
+    # parser.add_argument("--model", type=str, default='CNET_16_D4_e', help="GPU")
+    # parser.add_argument("--model", type=str, default='CNET_32_D4_b', help="GPU")
+    parser.add_argument("--model", type=str, default='CNET_32_D3_f', help="GPU")
+    # parser.add_argument("--model", type=str, default='V_32_D3_RLA_d_e2_skip', help="GPU")
+    # parser.add_argument("--model", type=str, default='CNET_32_D5b', help="GPU")
+    parser.add_argument("--ap_fcn", type=str, default='avrg', help="Aperture function estimation, gene: parameter generated, avrg: use PACBED")
     args = vars(parser.parse_args())
     dose = int(args["dose"])
     ds = int(args["ds"])
     if dose == 0:
         dose = None
 
-    # cp_path = 'airpi/ap_training/Ckp/Training/CNET_U_32_3_4'
-    # cp_path = 'airpi/ap_training/Ckp/Training/U_test'
-    # cp_path = 'airpi/ap_training/Ckp/Training/BR_64_2_low_amp'
-    cp_path = 'airpi/ap_training/Ckp/Training/BR_64_2'
-    # cp_path = 'airpi/ap_training/Ckp/Training/CNET_64'
-    # cp_path = 'airpi/ap_training/Ckp/Training/BRANCHED_RES_V_ADAM_CAT2b'
-    # cp_path = "airpi/ap_training/Ckp/Training/BRANCHED_RES_V_ADAM_CAT3"
-    # cp_path = "airpi/ap_training/Ckp/Training/BR7_4_3_32"
-    # cp_path = "airpi/ap_training/Ckp/Training/BRANCHED_RES_V_ADAM_CAT3_ld"
-    # cp_path = "airpi/ap_training/Ckp/Training/BRANCHED_RES_V_ADAM_CAT3_rev2_ld3"
-    bfm_type = "avrg"  # 'reco: pre-recorded cbed, gene: parameter generated cbed, avrg: use PACBED, None: No masking')
-    # bfm_type = 'gene'  # 'reco: pre-recorded cbed, gene: parameter generated cbed, avrg: use PACBED, None: No masking')
-
+    cp_path = 'Ckp/Training/' + args["model"]
+    
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args["gpu_id"])
 
-    from airpi.ap_reconstruction.reconstruction_functions import (
+    from ap_reconstruction.reconstruction_functions import (
         retrieve_phase_from_generator,
     )
-    from airpi.ap_reconstruction.airpi_dataset import airpi_dataset
-    from airpi.ap_architectures.utils import load_obj
-
+    from ap_reconstruction.airpi_dataset import airpi_dataset
+    from ap_utils.util_fcns import load_hparams
     prms_net = get_model_ckp(cp_path)
 
     # twisted bilayer_graphene
@@ -81,8 +76,8 @@ if __name__ == "__main__":
             "cbed_size": 128,
             "step_size": 0.2,
             "aberrations": [-1, 0.001],
-            "bfm_type": 'gene',
-            "oversample": 1,
+            "bfm_type": args["ap_fcn"],
+            "oversample": 2.0,
         }
 
     # MoS2
@@ -96,23 +91,24 @@ if __name__ == "__main__":
             "cbed_size": 128,
             "step_size": 0.05,
             "aberrations": [14.0312, 1e-3],
-            "bfm_type": 'gene',
-            "oversample": 1,
+            "bfm_type": args["ap_fcn"],
+            "oversample": 2.0,
         }
 
     if ds == 2:
         # STO
-        hd5_in = "/media/thomas/SSD/Samples/STO/hole.h5"
+        hd5_in = "/media/thomas/SSD/Samples/STO/hole_preprocessed_cropped_2.h5"
+        # hd5_in = "/media/thomas/SSD/Samples/STO/hole.h5"
         hd5_key = "ds"
         rec_prms = {
             "E0": 300.0,
             "apeture": 20.0,
             "gmax": 1.6671,
-            "cbed_size": 128,
-            "step_size": 0.1818,
+            "cbed_size": 64,
+            "step_size": 0.1818*2,
             "aberrations": [-1, 1e-3],
-            "bfm_type": 'gene',
-            "oversample": 1.0,
+            "bfm_type": args["ap_fcn"],
+            "oversample": 2.0,
         }
     if ds == 3:
         # WS
@@ -125,13 +121,13 @@ if __name__ == "__main__":
             "cbed_size": 64,
             "step_size": 0.09,
             "aberrations": [-1, 1e-3],
-            "bfm_type": 'avrg',
+            "bfm_type": args["ap_fcn"],
             "oversample": 1.0,
         }
     if ds == 4:
         # Au
-        hd5_in = "/media/data/Samples/Au_big_crop2.h5"
-        # hd5_in = "/media/thomas/SSD/Samples/Au/Au_big.h5"
+        # hd5_in = "/media/data/Samples/Au_big_crop2.h5"
+        hd5_in = "/media/thomas/SSD/Samples/Au/Au_big.h5"
         hd5_key = "ds"
         rec_prms = {
             "E0": 300.0,
@@ -140,8 +136,8 @@ if __name__ == "__main__":
             "cbed_size": 128,
             "step_size": 0.1394,
             "aberrations": [-1, 1e-3],
-            "bfm_type": "avrg",
-            "oversample": 1.0,
+            "bfm_type": args["ap_fcn"],
+            "oversample": 2.0,
         }
 
     if ds == 5:
@@ -155,7 +151,7 @@ if __name__ == "__main__":
             "cbed_size": 128,
             "step_size": 0.0314,
             "aberrations": [-1, 1e-3],
-            "bfm_type": "avrg",
+            "bfm_type": args["ap_fcn"],
             "oversample": 1.0,
         }
 
@@ -170,7 +166,7 @@ if __name__ == "__main__":
             "cbed_size": 128,
             "step_size": 0.1,
             "aberrations": [-1, 1.0],
-            "bfm_type": bfm_type,
+            "bfm_type": args["ap_fcn"],
             "oversample": 1,
         }
 
@@ -186,23 +182,24 @@ if __name__ == "__main__":
             "cbed_size": 128,
             "step_size": 0.12587,
             "aberrations": [-1, 1e-3],
-            "bfm_type": "gene",
+            "bfm_type": args["ap_fcn"],
             "oversample": 1.0,
         }
 
     if ds == 8:
         # Z
-        hd5_in = "/media/thomas/SSD/Samples/Z/Z/db_h5_Z_sim_6.h5"
+        hd5_in = "/media/thomas/SSD/Samples/Z/db_h5_6_sim.h5"
         hd5_key = "amp"
         rec_prms = {
-            "E0": 300.0,
-            "apeture": 30.0,
-            "gmax": 12.6984,
-            "cbed_size": 128,
-            "step_size": 1.2,
+            "E0": 200.0,
+            "apeture": 20.0,
+            "gmax": 0.7975,
+            "cbed_size": 64,
+            "step_size": 0.2,
             "aberrations": [-1, 1e-3],
             "bfm_type": "gene",
-            "oversample": 1.0,
+            "oversample": 2.0,
+            "order":['kx','ky','rx','ry']
         }
 
     if ds == 9:
@@ -216,10 +213,25 @@ if __name__ == "__main__":
             "cbed_size": 64,
             "step_size": 0.09,
             "aberrations": [-1, 1e-3],
-            "bfm_type": 'avrg',
+            "bfm_type": args["ap_fcn"],
             "oversample": 1.0,
         }
 
-    reconstruct_ds(hd5_in, hd5_key, prms_net, rec_prms, skip=int(args["step"]), dose=dose, save=True)
+    if ds == 10:
+        # WS2
+        hd5_in = "/media/thomas/SSD/Samples/number.h5"
+        hd5_key = "ds"
+        rec_prms = {
+            "E0": 60.0,
+            "apeture": 25.0,
+            "gmax": 0.802,
+            "cbed_size": 64,
+            "step_size": 0.09,
+            "aberrations": [-1, 1e-3],
+            "bfm_type": args["ap_fcn"],
+            "oversample": 1.0,
+        }
+
+    reconstruct_ds(hd5_in, hd5_key, prms_net, rec_prms, skip=int(args["step"]), dose=dose, save=False)
     print("done")
     quit()

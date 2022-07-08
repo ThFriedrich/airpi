@@ -2,19 +2,22 @@ import numpy as np
 from threading import Thread
 from multiprocessing import Queue, Process, Event
 import matplotlib.pyplot as plt
+from ap_training.data_fcns import fcn_weight_cbeds
 from tensorflow.data import Dataset as tf_ds
 from tensorflow.random import poisson as tf_poiss
-from tensorflow import int32, float32, squeeze, math
+from tensorflow import int32, float32, squeeze, math, image, transpose
 
 class tf_generator:
     '''Generator that keeps the HDF5-DB open and reads chunk-by-chunk'''
-    def __init__(self, data, dims, bfm, step, dose):
+    def __init__(self, data, dims, bfm, step, dose, step_size):
         self.file = data
         self.size_in =  dims
         self.dose = dose
         self.d_type = self.file.dtype 
         self.bfm = bfm
         self.step = step
+        self.step_size = step_size
+
         self.x_rest = -(self.file.shape[0] % self.step)
         if self.x_rest == 0:
             self.x_rest = None
@@ -39,9 +42,9 @@ class tf_generator:
     def RowWorker(self): 
         for rw_i in range(1,self.size_in[1]):
             self.rw = np.roll(self.rw,-1,axis=1)
-            load_dat = self.file.astype(self.d_type)._dset[:self.x_rest:self.step,(rw_i-1)*self.step,...] 
+            load_dat = self.file.astype(self.d_type)._dset[:self.x_rest:self.step,(rw_i)*self.step,...] 
             if self.dose is not None:
-                load_dat = squeeze(tf_poiss([1], load_dat*self.dose))
+                load_dat = squeeze(tf_poiss([1], load_dat*self.dose, seed=131087))
             self.rw[1:self.size_in[0]+1,2,...] = load_dat
             self.q_row.put((self.rw, rw_i))
 
@@ -67,13 +70,77 @@ class tf_generator:
             
     def cast_set(self, rw, rx):
         set = np.cast[np.float32](rw[rx-1:rx+2,...])
-        set = np.transpose(np.squeeze(set),(2,3,0,1))
+        # self.__plot_set2d__(set)
+        # set = np.transpose(np.squeeze(set),(2,3,0,1))
+        # set = np.transpose(np.squeeze(set),(2,3,0,1))
+        # set = np.flip(set,2)
+        set = np.transpose(np.squeeze(set),(3,2,0,1))
+        set = np.flip(set,2)
         set = np.flip(set,3)
-        set = np.reshape(set, self.size_in[2:] + (9,))**2
+        # self.__plot_set2d__(set)
+
+
+        set = np.reshape(set, self.size_in[2:] + (9,))
+        # self.__plot_set1d__(set)
+        # set = transpose(set,[2,0,1])
+        set = fcn_weight_cbeds(set, self.step_size)
+        # set = transpose(set,[1, 2, 0])
+        # self.__plot_set__(set)
         if self.bfm.all() is not None:
             set = np.concatenate((set,self.bfm),-1)
+
+        set = transpose(set,[2,0,1])
+        set = squeeze(image.resize(set[...,np.newaxis], (64,64)))
+        # set = squeeze(image.resize(set, (64,64)))
+        set = transpose(set,[1, 2, 0])
+
+        # self.__plot_set1d__(set)
         return set
      
+    def __plot_set__(self, set):
+        fig = plt.figure()
+        set_pw = set**0.1
+        # set_min = np.min(set_pw)
+        # set_max = np.max(set_pw)
+        order = [7, 4, 1, 8, 5, 2, 9, 6, 3]
+        for ix, ix_s in enumerate(order):
+            ax = fig.add_subplot(3, 3, ix_s)
+            im = ax.imshow(set_pw[...,ix])
+            ax.set_axis_off()
+            # im.set_clim(set_min, set_max)
+        plt.tight_layout()
+        plt.savefig('set.png')
+        plt.close()
+
+    def __plot_set2d__(self, set):
+        set_pw = set**0.1
+        # set_min = np.min(set_pw)
+        # set_max = np.max(set_pw)
+        fig = plt.figure(figsize=(6,6))
+        for iy in range(3):
+            for ix in range(3):
+                ax = plt.subplot(3,3,iy*3+ix+1)
+                im = ax.imshow(set_pw[...,ix,iy])
+                ax.set_axis_off()
+                # im.set_clim(set_min, set_max)
+        plt.tight_layout()
+        plt.savefig('set2.png')
+        plt.close()
+
+    def __plot_set1d__(self, set):
+        fig = plt.figure(figsize=(18,2))
+        set_pw = set**0.1
+        # set_min = np.min(set_pw)
+        # set_max = np.max(set_pw)
+
+        for iy in range(9):
+            ax = plt.subplot(1,9,iy+1)
+            im = ax.imshow(set_pw[...,iy])
+            ax.set_axis_off()
+            # im.set_clim(set_min, set_max)
+        plt.tight_layout()
+        plt.savefig('set3.png')
+        plt.close()
 
     def __call__(self):  
         while True:
@@ -84,7 +151,7 @@ class tf_generator:
             yield {'cbeds': set, 'pos': np.expand_dims([iy, ix],-1)}
                     
 class tf_generator_in_memory:
-    def __init__(self, data, size_in, bfm, step, dose):
+    def __init__(self, data, size_in, bfm, step, dose, step_size):
         self.bfm = bfm
         self.d_type = data.dtype 
         self.data = data.astype(self.d_type)._dset[...]
@@ -93,7 +160,8 @@ class tf_generator_in_memory:
         self.dose = dose
         self.rn_x = list(range(1,size_in[0]+1,self.step))
         self.rn_y = list(range(1,size_in[1]+1,self.step))
-       
+        self.step_size = step_size
+
     def cast_set(self, rw, rx):
         rx_st = rx-self.step; rxpst = rx+self.step
         ry_st = rw-self.step; rypst = rw+self.step
@@ -102,7 +170,8 @@ class tf_generator_in_memory:
             [rx,ry_st],     [rx,rw],     [rx,rypst], 
             [rxpst,ry_st],  [rxpst,rw],  [rxpst,rypst]],dtype=np.int32)
         set = self.data[load_list[:,0],load_list[:,1]].transpose([1,2,0])
-        
+        set = fcn_weight_cbeds(set, self.step_size)
+
         if self.dose is not None:
             set = squeeze(tf_poiss([1], set*self.dose))
         if self.bfm is not None:
@@ -129,22 +198,24 @@ class tf_generator_in_memory:
                 yield {'cbeds': set, 'pos': np.expand_dims([iy, ix],-1)}
 
 
-def tf_generator_ds(data, size_in, b_memory, bfm=None, step=1, dose=None):
+def tf_generator_ds(data, size_in, b_memory, bfm=None, step=1, dose=None, step_size=0.15):
     if bfm is not None:
+        if bfm.ndim==2:
+            bfm = np.expand_dims(bfm,-1)
         nc = 9 + bfm.shape[-1]
     else:
         nc = 9
     if b_memory:
             return tf_ds.from_generator(
-            tf_generator_in_memory(data, size_in, bfm, step, dose),
+            tf_generator_in_memory(data, size_in, bfm, step, dose, step_size),
             output_types=(  {'cbeds':float32, 'pos': int32}),
             output_shapes=( {'cbeds': [size_in[2], size_in[3], nc], 'pos':[2,1]} ) 
             )
     else:
         return tf_ds.from_generator(
-            tf_generator(data, size_in, bfm, step, dose),
+            tf_generator(data, size_in, bfm, step, dose, step_size),
             output_types=(  {'cbeds':float32, 'pos': int32}),
-            output_shapes=( {'cbeds': [size_in[2], size_in[3], nc], 'pos':[2,1]} ) 
+            output_shapes=( {'cbeds': [64, 64, nc], 'pos':[2,1]} ) 
             )
 
 class np_sequential_generator():

@@ -7,8 +7,8 @@ from skimage.feature import canny
 import warnings
 
 from tqdm import tqdm
-from airpi.ap_reconstruction.tf_generator import tf_generator_ds, np_sequential_generator
-from airpi.ap_architectures.utils import bin_mask, mrad_2_rAng
+from ap_reconstruction.tf_generator import tf_generator_ds, np_sequential_generator
+from ap_architectures.utils import tf_cast_complex, tf_probe_function, tf_mrad_2_rAng, tf_com, tf_FourierShift2D
 import tensorflow as tf
 class airpi_dataset:
     def __init__(self, rec_prms, file, key='fpd_expt/fpd_data/data', dose=None, in_memory=False, step=1):
@@ -18,6 +18,7 @@ class airpi_dataset:
         self.in_memory_overwrite = in_memory
         # Parameters relevant for Reconstruction
         self.rec_prms = rec_prms
+        self.get_sequence()
 
         # Dataset Augmentation
         self.dose = dose
@@ -27,7 +28,16 @@ class airpi_dataset:
         self.load_ds()
         self.get_bfm(rec_prms['bfm_type'])
         
-            
+    def get_sequence(self):
+        # Order needed = ['ky','kx','rx','ry']
+        if 'order' not in self.rec_prms:
+            self.rec_prms['order'] =  ['rx','ry','kx','ky']
+
+        if self.rec_prms['order'] == ['kx','ky','rx','ry']:
+            self.rec_prms['dim_seq'] = (1,0,2,3)
+        elif self.rec_prms['order'] == ['rx','ry','kx','ky']:
+            self.rec_prms['dim_seq'] = (3,2,0,1)
+
     def get_ds_type(self):
         self.in_memory = True
         if self.path.endswith('.npy'):
@@ -69,37 +79,40 @@ class airpi_dataset:
         else:
             warnings.warn("Warning! No valid Datset format detected!")
 
-        self.rec_prms['nx']  = np.floor(data.shape[1]/self.step).astype(np.int32)
-        self.rec_prms['ny']  = np.floor(data.shape[0]/self.step).astype(np.int32)
+        self.rec_prms['nx']  = np.floor(data.shape[self.rec_prms['dim_seq'][2]]/self.step).astype(np.int32)
+        self.rec_prms['ny']  = np.floor(data.shape[self.rec_prms['dim_seq'][3]]/self.step).astype(np.int32)
         self.ds_n_dat = self.rec_prms['ny'] * self.rec_prms['nx']
-        self.ds_dims = (self.rec_prms['ny'] , self.rec_prms['nx'], data.shape[2], data.shape[3])
+        self.ds_dims = (self.rec_prms['ny'] , self.rec_prms['nx'], data.shape[self.rec_prms['dim_seq'][0]], data.shape[self.rec_prms['dim_seq'][1]])
         self.ds_seq = np_sequential_generator(data, self.ds_dims, self.step*5, scaling)
         self.get_bfm(self.rec_prms['bfm_type']) 
-        self.ds = tf_generator_ds(data, self.ds_dims, self.in_memory, self.rec_prms['beam_in_k'], self.step, self.dose)
+        self.ds = tf_generator_ds(data, self.ds_dims, self.in_memory, self.rec_prms['beam_in_k'][...,0], self.step, self.dose, self.rec_prms['step_size'])
         
     
     def get_bfm(self, bfm_type, beam_in = None): 
 
         if bfm_type == 'gene':
-            self.rec_prms['beam_in_k'],  self.rec_prms['beam_in_r']  = np.array(bin_mask(self.rec_prms['E0'] , self.rec_prms['apeture'] , self.rec_prms['gmax'] , self.ds_dims[2], self.rec_prms['aberrations'] , 'b', 'complex'))
-            # self.rec_prms['beam_in_k'] , self.rec_prms['beam_in_r']  = np.array(bin_mask(self.rec_prms['E0'] , self.rec_prms['apeture'] , self.rec_prms['gmax'] , 128, [-1, 0.001], 'b', 'complex'))
-
+            probe = tf_probe_function(self.rec_prms['E0'] , self.rec_prms['apeture'] , self.rec_prms['gmax'] , self.ds_dims[2], self.rec_prms['aberrations'] , 'k', 'complex')
+            self.rec_prms['beam_in_k'] = np.array(probe)
+           
         elif bfm_type == 'avrg':
             pacbed = np.zeros(self.ds_dims[2:])
             for cbed in tqdm(self.ds_seq):
                 pacbed += cbed
             pacbed /= np.amax(pacbed)
-            edges = canny(pacbed, sigma=1)
+            edges = canny(pacbed, sigma=2)
             hough_radii = np.arange(5, 200, 1)
             hough_res = hough_circle(edges, hough_radii)
             accums, cx, cy, radius = hough_circle_peaks(hough_res, hough_radii,
                                                     total_num_peaks=1)
-            self.rec_prms['gmax'] = np.cast[np.float32](mrad_2_rAng(self.rec_prms['E0'],self.rec_prms['apeture'])*(self.ds_dims[2]/2/radius[0]))
-            msk = pacbed < 0.1
-            beam_in_f = np.cast[np.complex](np.where(msk,0.0,1.0))
-            est_beam  = np.array(bin_mask(self.rec_prms['E0'] , self.rec_prms['apeture'] , self.rec_prms['gmax'] , self.ds_dims[2], self.rec_prms['aberrations'] , 'k', 'complex'))
-            # self.rec_prms['beam_in_k']  = np.stack([np.abs(beam_in_f), est_beam[...,1]],axis=-1)
-            self.rec_prms['beam_in_k'] = est_beam
+            self.rec_prms['gmax'] = np.cast[np.float32](tf_mrad_2_rAng(self.rec_prms['E0'],self.rec_prms['apeture'])*(self.ds_dims[2]/2/radius[0]))
+            # msk = tf.cast(pacbed < 0.1,tf.complex64)
+            # com, offset = tf_com(msk[tf.newaxis,...])
+            # beam_in_f = np.cast[np.complex](np.where(msk,0.0,1.0))
+            probe = tf_probe_function(self.rec_prms['E0'] , self.rec_prms['apeture'] , self.rec_prms['gmax'] , self.ds_dims[2], self.rec_prms['aberrations'] , 'k', 'complex')
+            probe = tf_cast_complex(probe[...,0], probe[...,1])
+            # probe = msk
+            # probe = tf.squeeze(tf_FourierShift2D(probe[tf.newaxis,...], offset))
+            self.rec_prms['beam_in_k']  = np.array(tf.stack((tf.math.abs(probe), tf.math.angle(probe)),axis=-1))
         else:
             self.bfm = None
         
