@@ -1,11 +1,10 @@
 """Module containing Functions for Tensorflow Training and Grid Search"""
 import numpy as np
 import tensorflow as tf
-from ap_architectures.utils import tf_binary_mask, tf_fft2d_A_p, tf_pi
+from ap_architectures.utils import tf_binary_mask, tf_fft2d_A_p, tf_pi, tf_probe_k, tf_rAng_2_mrad
 import h5py
 
 from ap_utils.util_fcns import PRM
-
 
 # @tf.function
 def cast_float32(x: tf.Tensor, meta: tf.Tensor, shape: tf.TensorShape) -> tf.Tensor:
@@ -59,6 +58,42 @@ def get_h5_ds(hdf5_path):
 
     return ds
 
+@tf.function
+def fcn_decode_tfrecords(record):
+    '''Decoding/Preprocessing of TFRecord Dataset'''
+    features = {
+        'features': tf.io.FixedLenFeature([1], tf.string),
+        'meta': tf.io.FixedLenFeature([19], tf.float32),
+        'labels_k': tf.io.FixedLenFeature([1], tf.string),
+        'labels_r': tf.io.FixedLenFeature([1], tf.string),
+        'probe_r': tf.io.FixedLenFeature([1], tf.string)
+    }
+
+    parsed_features = tf.io.parse_single_example(record, features)
+
+    # Bring the pattern back in shape
+    fea = tf.reshape(tf.io.decode_raw(parsed_features['features'], tf.uint16), [9, 64, 64])
+    lab_k = tf.reshape(tf.io.decode_raw(parsed_features['labels_k'], tf.uint16), [2, 64, 64])
+    lab_r = tf.reshape(tf.io.decode_raw(parsed_features['labels_r'], tf.uint16), [2, 64, 64])
+    prob_r = tf.reshape(tf.io.decode_raw(parsed_features['probe_r'], tf.uint16),[2, 64, 64])
+
+    fea = tf.transpose(fea, [2, 1, 0])
+    lab_k = tf.transpose(lab_k, [2, 1, 0])
+    lab_r = tf.transpose(lab_r, [2, 1, 0])
+    prob_r = tf.transpose(prob_r, [2, 1, 0])
+
+    prms, sc_x, sc_yk, sc_yr, sc_pr = tf.split(parsed_features['meta'], [4, 9, 2, 2, 2])
+    
+    # 3x3 cbed-kernel
+    sh_x = tf.TensorShape((64, 64, PRM.X_SHAPE[2]))
+    x = cast_float32(fea, sc_x, sh_x)
+
+    # Label and probe
+    lab_k = cast_wave_float32(lab_k, sc_yk)
+    lab_r = cast_wave_float32(lab_r, sc_yr)
+    prob_r = cast_wave_float32(prob_r, sc_pr)
+
+    return x, lab_k, lab_r, prob_r, prms
 
 @tf.function
 def fcn_decode_h5(fea, lab_k, lab_r, prob_r, met):
@@ -99,15 +134,23 @@ def fcn_rnd_no_sample(x, yk, probe, p):
 @tf.function
 def add_binary_mask(x:tf.Tensor, prob_r:tf.Tensor) -> tf.Tensor:
     prob_k = tf_fft2d_A_p(prob_r)
-    b_msk = tf_binary_mask(prob_k[...,0])
+    b_msk = tf_binary_mask(prob_k[...,0],threshold=0.05)
     x = tf.concat([x, b_msk[...,tf.newaxis]], -1)
 
     return x
 
 @tf.function
-def fcn_decode_train(fea, lab_k, lab_r, prob_r, met):
+def add_binary_mask_gen(x:tf.Tensor, prms:tf.Tensor) -> tf.Tensor:
+    px_k =  tf_rAng_2_mrad(prms[0],prms[2]/64)*2
+    prob_k = tf_probe_k(prms[0], prms[1]+px_k, prms[2], 64, [-1, 0.001])[0]
+    x = tf.concat([x, prob_k[...,tf.newaxis]], -1)
+    return x
+
+@tf.function
+def fcn_decode_train(x, lab_k, lab_r, prob_r, prms):
     """Decoding/Preprocessing of HDF5 Dataset for Training (random Poisson)"""
-    x, lab_k, lab_r, prob_r, _ = fcn_decode_h5(fea, lab_k, lab_r, prob_r, met)
+    # x, lab_k, lab_r, prob_r, _ = fcn_decode_tfrecords(fea, lab_k, lab_r, prob_r, met)
+    # x, lab_k, lab_r, prob_r, _ = fcn_decode_h5(fea, lab_k, lab_r, prob_r, met)
 
     # Random no-sample
     x, lab_k = fcn_rnd_no_sample(x, lab_k, tf_fft2d_A_p(prob_r), 0.03)
@@ -118,18 +161,20 @@ def fcn_decode_train(fea, lab_k, lab_r, prob_r, met):
     x = tf.squeeze(tf.random.poisson([1], x * d))
 
     if PRM.scale_cbeds:
-        x = fcn_weight_cbeds(x, met[3])
+        x = fcn_weight_cbeds(x, prms[3])
 
-    x = add_binary_mask(x, prob_r)
+    x = add_binary_mask_gen(x, prms)
+    # x = add_binary_mask(x, prob_r)
 
     y = tf.concat([lab_k, lab_r, prob_r], -1)
 
     return x, y
 
 @tf.function
-def fcn_decode_val(fea, lab_k, lab_r, prob_r, met):
+def fcn_decode_val(x, lab_k, lab_r, prob_r, prms):
     """Decoding/Preprocessing of HDF5 Dataset for Validation (random Poisson, doses same)"""
-    x, lab_k, lab_r, prob_r, prms = fcn_decode_h5(fea, lab_k, lab_r, prob_r, met)
+    # x, lab_k, lab_r, prob_r, prms = fcn_decode_tfrecords(fea, lab_k, lab_r, prob_r, met)
+    # x, lab_k, lab_r, prob_r, prms = fcn_decode_h5(fea, lab_k, lab_r, prob_r, met)
 
     # Generate a seed based on sample meta-data
     prm_prod = tf.reduce_prod(prms[0:2])
@@ -144,13 +189,13 @@ def fcn_decode_val(fea, lab_k, lab_r, prob_r, met):
     x = tf.squeeze(tf.random.poisson([1], x * d, seed=13))
 
     if PRM.scale_cbeds:
-        x = fcn_weight_cbeds(x, met[3])
+        x = fcn_weight_cbeds(x, prms[3])
 
-    x = add_binary_mask(x, prob_r)
+    # x = add_binary_mask(x, prob_r)
+    x = add_binary_mask_gen(x, prms)
     y = tf.concat([lab_k, lab_r, prob_r], -1)
 
     return x, y
-
 
 @tf.function
 def fcn_weight_cbeds(cbeds, step_size):
@@ -162,18 +207,22 @@ def fcn_weight_cbeds(cbeds, step_size):
 
     cbeds = tf.transpose(cbeds,[2,0,1])
     cbeds = tf.tensor_scatter_nd_update(cbeds, ind_1, tf.gather_nd(cbeds,ind_1)*d1)
-    cbeds = tf.tensor_scatter_nd_update(cbeds, ind_2, tf.gather_nd(cbeds,ind_1)*d2)
+    cbeds = tf.tensor_scatter_nd_update(cbeds, ind_2, tf.gather_nd(cbeds,ind_2)*d2)
     cbeds = tf.transpose(cbeds,[1,2,0])
 
     return cbeds
 
-
+        
 def datasetPipeline(filepaths, is_training, prms):
     """HDF5 Dataset-Pipeline"""
     datasets = list()
     for path in filepaths:
-        tf.print(path)
-        datasets.append(get_h5_ds(path))
+        if path.endswith(".h5"):
+            datasets.append(get_h5_ds(path).map(fcn_decode_h5))
+            tf.print(path)
+        if path.endswith(".tfrecord"):
+            datasets.append(tf.data.TFRecordDataset(path,num_parallel_reads=tf.data.experimental.AUTOTUNE).map(fcn_decode_tfrecords))
+            tf.print(path)
 
     if is_training:
         dataset = tf.data.experimental.sample_from_datasets(datasets)
@@ -191,14 +240,14 @@ def datasetPipeline(filepaths, is_training, prms):
 
     # Set the batchsize
     dataset = dataset.batch(prms["batch_size"], drop_remainder=is_training)
-    dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
+    dataset = dataset.prefetch(8)
 
     return dataset
 
 
 def getDatasets(prms):
     if PRM.debug:
-        n_train_data = 32
+        n_train_data = 2048
     else:
         n_train_data = PRM.n_train
 

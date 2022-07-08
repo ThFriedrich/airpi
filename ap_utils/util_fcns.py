@@ -2,13 +2,27 @@ from io import BytesIO
 import tensorflow as tf
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
-from numpy import ix_, vstack, zeros, logspace
+from numpy import ix_, zeros, logspace
 from pickle import dump, load
 import os
 import sys
 import h5py
 
 from ap_architectures.utils import pred_dict, tf_pow01, true_dict
+from ap_reconstruction.colormaps import parula
+
+def fcn_decode_tfrecords(record):
+    '''Decoding/Preprocessing of TFRecord Dataset'''
+    features = {
+        'features': tf.io.FixedLenFeature([1], tf.string),
+        'meta': tf.io.FixedLenFeature([19], tf.float32),
+        'labels_k': tf.io.FixedLenFeature([1], tf.string),
+        'labels_r': tf.io.FixedLenFeature([1], tf.string),
+        'probe_r': tf.io.FixedLenFeature([1], tf.string)
+    }
+
+    parsed_features = tf.io.parse_single_example(record, features)
+    return parsed_features
 
 # Training run setup, argument passing, etc.
 def debugger_is_active() -> bool:
@@ -35,24 +49,82 @@ class Parameters:
         ar.append(tp2)
         return [ar[i] for i in self.ds_order]
 
-    def get_database_sizes(self, prms):
-        """Read global variables"""
-        for path in prms["train_path"]:
+    def get_ds_size(self,path):
+        if path.endswith(".h5"):
             with h5py.File(path, "r") as hf:
                 feat_shape = hf["features"][0].shape
                 num_feat = len(hf["features"])
-                self.n_train += num_feat
-                self.X_SHAPE = self.__tuple2array__(feat_shape, num_feat)
+        elif path.endswith(".tfrecord"):
+            num_feat = 0
+            ds = tf.data.TFRecordDataset(path,num_parallel_reads=8).map(fcn_decode_tfrecords)
+            num_feat += sum(1 for _ in ds)
+            feat_shape = [9,64,64]
+            # num_feat = 742688
+        return num_feat, feat_shape 
+
+    def get_database_sizes(self, prms):
+        """Read global variables"""
+        for path in prms["train_path"]:
+            num_feat, feat_shape = self.get_ds_size(path)
+            feat_shape = [9,64,64]
+            # num_feat = 742688
+            self.n_train += num_feat
+            self.X_SHAPE = self.__tuple2array__(feat_shape, num_feat)
         for path in prms["val_path"]:
-            with h5py.File(path, "r") as hf:
-                self.n_val += len(hf["features"])
+            self.n_val += self.get_ds_size(path)[0]
         self.model = prms["model_name"]
 
         return self
 
 
+
 PRM = Parameters(0)
 
+def get_default_prms(hp_path, log_path):
+    # Construct default dictionaries for hyperparameters
+    prms = {
+        "model_name": "dbg",
+        # Data
+        "train_path": absoluteFilePaths("/media/thomas/SSD/Data_64/Training"),
+        "val_path": absoluteFilePaths("/media/thomas/SSD/Data_64/Validation"),
+        "test_path": absoluteFilePaths("/media/thomas/SSD/Data_64/Test"),
+        "sample_dir": "/media/thomas/SSD/Samples/",
+        "log_path": log_path,
+        "cp_path": hp_path,
+        # Learning Rate schedule parameters
+        "learning_rate": 1e-4,
+        "learning_rate_0":1e-4,
+        "epochs": 300,
+        "ep": 0,
+        "epochs_cycle_1": 50,
+        "epochs_cycle": 20,
+        "epochs_ramp": 5,
+        "warmup": False,
+        "cooldown": True,
+        "lr_fact": 0.75,
+        # Optimizer, Model Parameters
+        "loss_prms_r": [1.0, 1.0, 1.0, 1.0, 1e-4, 1.0],
+        "loss_prms_k":[1.0, 3.0, 3.0, 1.0, 1e-4, 0, 0],
+        "batch_size": 32,
+        "scale_cbeds": True,
+        "dose": [1, 10, 5]
+    }
+
+    prms_net = {
+        "arch": "UNET",
+        "branching": 0,
+        "kernel": [3, 3],
+        "normalization": 0,  # 0 = None, 1 = 'instance', 2 = layer else Batch
+        "activation": 5,  # 0 = None, 1 = 'LeakyReLU', 2 = ELU, 3 = SWISH , 4=Sigmoid 7=Group else ReLu
+        "filters": 16,
+        "depth": 3,
+        "stack_n": 3,
+        "type":"V",
+        "w_regul": None,
+        "a_regul": None,
+        "dropout": None,
+    }
+    return prms, prms_net
 
 def manage_args(args):
     """
@@ -64,142 +136,63 @@ def manage_args(args):
 
     # Default arguments
     # Weight order:
-    # k: [px_p, px_a, px_pw, px_int, int_tot, df_ratio]
-    # r: [px_p, px_a, px_pw, px_int, obj]
-    def_args = {
-        "model": "model_dbg",
-        "arch": "UNET",
-        "filters": 16,
-        "depth": 3,
-        "stack_n": 3,
-        "w_regul": None,
-        "a_regul": None,
-        "r_weights": [1.0, 1.0, 1.0, 1.0, 0.0, 1.0],
-        "k_weights": [1.0, 1.0, 1.0, 1.0, 0.0, 0.01, 1.0],
-        "bs": 8,
-        "lr": 1e-5,
-        "gpu_id": 0,
-        "db_path": "Data_64",
-        "debug": debugger_is_active(),
-        "dose": [3.0, 10.0, 5.0],
-        "branching": 0,
-        "dropout": None,
-        "normalization": 0,  # 0 = None, 1 = 'instance', 2 = layer else Batch
-        "activation": 1,  # 0 = None, 1 = 'LeakyReLU', 2 = ELU, 3 = SWISH , 4=Sigmoid 7=Group else ReLu
-        "type": "V",  # 'RES', 'DCR', 'V'
-    }
+    # r: [px_p, px_as, px_pw, px_int, obj]
+    # k: [px_p, px_as, px_pw, px_int, int_tot, df_ratio]
 
     # load hyperparameters from file or delete checkpoint if available
-    if args["model"] is not None:
-        def_args["model"] = args["model"]
+    if args["model_name"] is not None:
+        model_name = args["model_name"]
+    else:
+        model_name = "dbg"
 
     cwd = os.path.abspath(os.path.curdir)
-    hp_path = os.path.join(cwd, "Ckp", "Training", def_args["model"])
-    log_path = os.path.join(cwd, "Logs", "Training", def_args["model"])
+    hp_path = os.path.join(cwd, "Ckp", "Training", model_name)
+    log_path = os.path.join(cwd, "Logs", "Training_3",model_name)
 
-    prms_ld, prms_net_ld = load_hyperparameters(hp_path, log_path)
+    prms, prms_net = load_hyperparameters(hp_path, log_path)
 
     # Assign default values to arguments that are not explicitly given
     for key in args:
-        if args[key] is None:
-            args[key] = def_args[key]
-
-    # Construct default dictionaries for hyperparameters
-    prms = {
-        "model_name": args["model"],
-        # Data
-        "train_path": absoluteFilePaths(args["db_path"] + "/Training"),
-        "val_path": absoluteFilePaths(args["db_path"] + "/Validation"),
-        "test_path": absoluteFilePaths(args["db_path"] + "/Test"),
-        "log_path": log_path,
-        "cp_path": hp_path,
-        # Learning Rate schedule parameters
-        "learning_rate": args["lr"],
-        "learning_rate_0": args["lr"],
-        "epochs": 250,
-        "ep": 0,
-        "epochs_cycle_1": 30,
-        "epochs_cycle": 10,
-        "epochs_ramp": 3,
-        "warmup": False,
-        "cooldown": True,
-        "lr_fact": 0.5,
-        # Optimizer, Model Parameters
-        "loss_prms_r": args["r_weights"],
-        "loss_prms_k": args["k_weights"],
-        "batch_size": args["bs"],
-        "scale_cbeds": True
-    }
-
-    prms_net = {
-        "arch": args["arch"],
-        "branching": args["branching"],
-        "kernel": [3, 3],
-        "normalization": args[
-            "normalization"
-        ],  # 0 = None, 1 = 'instance', 2 = layer else Batch
-        "activation": args[
-            "activation"
-        ],  # 0 = None, 1 = 'LeakyReLU', 2 = ELU, 3 = SWISH , 4=Sigmoid 7=Group else ReLu
-        "filters": args["filters"],
-        "depth": args["depth"],
-        "stack_n": args["stack_n"],
-        "type": "V",  # 'RES', 'DCR', 'V'
-        "w_regul": None,
-        "a_regul": None,
-        "dropout": None,
-    }
-
-    # Overwrite default hyperparameters with hyperparameters from file
-    for key in prms_ld:
-        if key in prms:
-            prms[key] = prms_ld[key]
-
-    for key in prms_net_ld:
-        if key in prms_net:
-            prms_net[key] = prms_net_ld[key]
-
-    # Overwrite hyperparameters with hyperparameters from user
-    if len(prms_ld) > 0 and len(prms_net_ld) > 0:
-        for key in args:
-            if args[key] is not None:
-                if key == "db_path":
-                    prms.update(
-                        {
-                            "train_path": absoluteFilePaths(
-                                args["db_path"] + "/Training"
-                            ),
-                            "val_path": absoluteFilePaths(
-                                args["db_path"] + "/Validation"
-                            ),
-                            "test_path": absoluteFilePaths(args["db_path"] + "/Test"),
-                        }
-                    )
-                if key == "loss_prms_r":
-                    prms.update({"loss_prms_r": args["loss_prms_r"]})
-                if key == "loss_prms_k":
-                    prms.update({"loss_prms_k": args["loss_prms_k"]})
-                if key == "learning_rate":
-                    prms.update(
-                        {
-                            "learning_rate": args["learning_rate"],
-                            "learning_rate_0": args["learning_rate"],
-                        }
-                    )
-                if key == "bs":
-                    prms.update({"batch_size": args["bs"]})
-
+        if args[key] is not None:
+            if key in prms:
+                prms[key] = args[key]
+            if key in prms_net:
+                prms_net[key] = args[key]
+            if key == "db_path":
+                prms.update(
+                    {
+                        "train_path": absoluteFilePaths(
+                            args["db_path"] + "/Training"
+                        ),
+                        "val_path": absoluteFilePaths(
+                            args["db_path"] + "/Validation"
+                        ),
+                        "test_path": absoluteFilePaths(args["db_path"] + "/Test"),
+                    }
+                )
+            if key == "lr":
+                prms.update(
+                    {
+                        "learning_rate": args["lr"],
+                        "learning_rate_0": args["lr"],
+                    }
+                )
+            if key == "bs":
+                prms.update({"batch_size": args["bs"]})
+    if "dose" not in prms:
+        prms["dose"] = [1, 10, 5]
     # Set global variable PRM
     PRM.dose = tf.constant(
-        logspace(args["dose"][0], args["dose"][1], num=2048) * args["dose"][2],
+        logspace(prms["dose"][0], prms["dose"][1], num=2048) * prms["dose"][2],
         dtype=tf.float32,
     )
 
+    PRM.scale_cbeds = prms["scale_cbeds"]
     PRM.get_database_sizes(prms)
 
     # Save hyperparameters to file
     save_hparams([prms, prms_net], os.path.join(hp_path,"hyperparameters.pickle"))
-
+    
     return prms, prms_net
 
 
@@ -228,7 +221,7 @@ def load_hparams(name):
         return prms, prms_net
 
 
-def load_hyperparameters(cp_path, log_path):
+def load_hyperparameters(cp_path, log_path='.'):
     """
     Check if checkpoint exists then prompt user to load or delete checkpoint.
     Input:
@@ -254,9 +247,10 @@ def load_hyperparameters(cp_path, log_path):
             if os.path.exists(log_path):
                 rmtree(log_path, ignore_errors=True)
             os.makedirs(cp_path)
+            prms, prms_net = get_default_prms(cp_path, log_path)
     else:
-        os.makedirs(cp_path)
-
+        os.makedirs(cp_path, exist_ok=True)
+        prms, prms_net = get_default_prms(cp_path, log_path)
     return prms, prms_net
 
 
@@ -272,7 +266,7 @@ def absoluteFilePaths(directory):
     files = list()
     for dirpath, _, filenames in os.walk(directory):
         for f in filenames:
-            if f.endswith(".h5"):
+            if f.endswith(".tfrecord"):
                 files.append(os.path.abspath(os.path.join(dirpath, f)))
     return files
 
@@ -294,6 +288,21 @@ def fcn_plot_to_image(figure):
 
     return image
 
+def fcn_plot_example(obj,epoch=0,name='default'):
+    """Plot example of a full reconstruction"""
+    fig = plt.figure(figsize=(7, 7))
+    img = plt.imshow(obj, cmap=parula)
+    plt.axis('off')
+    plt.colorbar(img,fraction=0.046, pad=0.04)
+    path = os.path.join("Images", PRM.model, "Epoch_" + str(epoch))
+
+    os.makedirs(path, exist_ok=True)
+    plt.savefig(
+        os.path.join(path, PRM.model + "_" + name + "_" + str(epoch+1) + ".png")
+    )
+    im = fcn_plot_to_image(fig)
+    return im
+
 
 def fcn_plot_nn_in_out(feat, pred, lab=None, epoch=0, suffix="0"):
     """
@@ -301,8 +310,6 @@ def fcn_plot_nn_in_out(feat, pred, lab=None, epoch=0, suffix="0"):
     Input:
         feat: features of test dataset
         pred: predictions of test dataset
-        mask_space: mask of test dataset
-        pred_space: prediction mask of test dataset
         lab: labels of test dataset
         epoch: epoch of training
         suffix: suffix of plot
