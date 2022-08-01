@@ -39,7 +39,7 @@ class Parameters:
         self.n_train = 0
         self.n_val = 0
         self.ds_order = [1, 2, 0, 3]
-        self.dose = tf.constant(logspace(2, 10, num=2048) * 5.0, dtype=tf.float32)
+        self.dose = tf.constant(logspace(3, 10, num=2048) * 5.0, dtype=tf.float32)
         self.model = "dbg"
         self.model_loaded = False
         self.debug = debugger_is_active()
@@ -65,9 +65,9 @@ class Parameters:
     def get_database_sizes(self, prms):
         """Read global variables"""
         for path in prms["train_path"]:
-            num_feat, feat_shape = self.get_ds_size(path)
+            # num_feat, feat_shape = self.get_ds_size(path)
             feat_shape = [9,64,64]
-            # num_feat = 742688
+            num_feat = 742688
             self.n_train += num_feat
             self.X_SHAPE = self.__tuple2array__(feat_shape, num_feat)
         for path in prms["val_path"]:
@@ -92,8 +92,8 @@ def get_default_prms(hp_path, log_path):
         "log_path": log_path,
         "cp_path": hp_path,
         # Learning Rate schedule parameters
-        "learning_rate": 1e-4,
-        "learning_rate_0":1e-4,
+        "learning_rate": 1e-6,
+        "learning_rate_0":1e-6,
         "epochs": 300,
         "ep": 0,
         "epochs_cycle_1": 50,
@@ -103,19 +103,19 @@ def get_default_prms(hp_path, log_path):
         "cooldown": True,
         "lr_fact": 0.75,
         # Optimizer, Model Parameters
-        "loss_prms_r": [1.0, 1.0, 1.0, 1.0, 1e-4, 1.0],
-        "loss_prms_k":[1.0, 3.0, 3.0, 1.0, 1e-4, 0, 0],
+        "loss_prms_r": [1.0, 1.0, 1.0, 25.0, 2.0, 1.0, 0.1],
+        "loss_prms_k":[2.0, 4.0, 2.0, 4.0, 1.0, 1.0e-3, 1.0],
         "batch_size": 32,
         "scale_cbeds": True,
-        "dose": [1, 10, 5]
+        "dose": [5, 10, 5]
     }
 
     prms_net = {
         "arch": "UNET",
         "branching": 0,
         "kernel": [3, 3],
-        "normalization": 0,  # 0 = None, 1 = 'instance', 2 = layer else Batch
-        "activation": 5,  # 0 = None, 1 = 'LeakyReLU', 2 = ELU, 3 = SWISH , 4=Sigmoid 7=Group else ReLu
+        "normalization": 5,     # 0 = None, 1 = Instance, 2 = Layer else Batch
+        "activation": 5,        # 0 = None, 1 = LeakyReLU, 2 = ELU, 3 = SWISH , 4=Sigmoid else ReLu
         "filters": 16,
         "depth": 3,
         "stack_n": 3,
@@ -123,6 +123,7 @@ def get_default_prms(hp_path, log_path):
         "w_regul": None,
         "a_regul": None,
         "dropout": None,
+        "global_skip": True,
     }
     return prms, prms_net
 
@@ -147,7 +148,7 @@ def manage_args(args):
 
     cwd = os.path.abspath(os.path.curdir)
     hp_path = os.path.join(cwd, "Ckp", "Training", model_name)
-    log_path = os.path.join(cwd, "Logs", "Training_3",model_name)
+    log_path = os.path.join(cwd, "Logs", "Training_5",model_name)
 
     prms, prms_net = load_hyperparameters(hp_path, log_path)
 
@@ -318,6 +319,7 @@ def fcn_plot_nn_in_out(feat, pred, lab=None, epoch=0, suffix="0"):
     def format_axes(fig):
         for ax in fig.axes:
             ax.set_axis_off()
+            plt.colorbar(ax.images[0], ax=ax, fraction=0.046, pad=0.04)
 
     # Create figure
     pred_r, pred_k = pred_dict(pred)
@@ -353,46 +355,46 @@ def fcn_plot_nn_in_out(feat, pred, lab=None, epoch=0, suffix="0"):
     ax2.set_title("Mask k")
 
     # Label
-    ax5 = fig.add_subplot(gs[0:2, 3:5])
-    ax5.imshow(lab_k["amp_sc"])
-    ax5.set_title("True k Amp")
+    ax3 = fig.add_subplot(gs[0:2, 3:5])
+    ax3.imshow(lab_k["amp_sc"])
+    ax3.set_title("True k Amp")
 
-    ax6 = fig.add_subplot(gs[0:2, 5:7])
-    ax6.imshow(lab_k["phase"])
-    ax6.set_title("True k Phase")
+    ax4 = fig.add_subplot(gs[0:2, 5:7])
+    ax4.imshow(lab_k["phase"])
+    ax4.set_title("True k Phase")
 
-    ax7 = fig.add_subplot(gs[0:2, 7:9])
-    ax7.imshow(lab_r["amp_sc"])
-    ax7.set_title("True r Amp")
+    ax5 = fig.add_subplot(gs[0:2, 7:9])
+    ax5.imshow(lab_r["amp_sc"])
+    ax5.set_title("True r Amp")
 
-    ax8 = fig.add_subplot(gs[0:2, 9:11])
-    ax8.imshow(lab_r["phase"])
-    ax8.set_title("True r Phase")
+    ax6 = fig.add_subplot(gs[0:2, 9:11])
+    ax6.imshow(lab_r["phase"])
+    ax6.set_title("True r Phase")
 
-    ax8 = fig.add_subplot(gs[0:2, 11:13])
-    ax8.imshow(lab_r["obj"]*weight_r)
-    ax8.set_title("True Object")
+    ax7 = fig.add_subplot(gs[0:2, 11:13])
+    ax7.imshow(lab_r["obj"]*weight_r)
+    ax7.set_title("True Object")
 
     # Predictions
-    ax9 = fig.add_subplot(gs[2:, 3:5])
-    ax9.imshow(pred_k["amp_sc"])
-    ax9.set_title("Pred k Amp")
+    ax8 = fig.add_subplot(gs[2:, 3:5])
+    ax8.imshow(pred_k["amp_sc"])
+    ax8.set_title("Pred k Amp")
 
-    ax10 = fig.add_subplot(gs[2:, 5:7])
-    ax10.imshow(pred_k["phase"])
-    ax10.set_title("Pred k Phase")
+    ax9 = fig.add_subplot(gs[2:, 5:7])
+    ax9.imshow(pred_k["phase"])
+    ax9.set_title("Pred k Phase")
 
-    ax11 = fig.add_subplot(gs[2:, 7:9])
-    ax11.imshow(pred_r["amp_sc"])
-    ax11.set_title("Pred r Amp")
+    ax10 = fig.add_subplot(gs[2:, 7:9])
+    ax10.imshow(pred_r["amp_sc"])
+    ax10.set_title("Pred r Amp")
 
-    ax12 = fig.add_subplot(gs[2:, 9:11])
-    ax12.imshow(pred_r["phase"])
-    ax12.set_title("Pred r Phase")
+    ax11 = fig.add_subplot(gs[2:, 9:11])
+    ax11.imshow(pred_r["phase"])
+    ax11.set_title("Pred r Phase")
 
-    ax13 = fig.add_subplot(gs[2:, 11:13])
-    ax13.imshow(pred_r["obj"]*weight_r)
-    ax13.set_title("Pred Object")
+    ax12 = fig.add_subplot(gs[2:, 11:13])
+    ax12.imshow(pred_r["obj"]*weight_r)
+    ax12.set_title("Pred Object")
 
     format_axes(fig)
     plt.tight_layout()

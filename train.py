@@ -8,20 +8,24 @@ def fcn_train(prms_o, prms_net, NET):
 
     training_ds, validation_ds = getDatasets(prms_o)
 
-    model = NET(training_ds._flat_shapes[0][1:4], prms_net).build()
+    model = NET(prms_net, training_ds._flat_shapes[0][1:4]).build()
+    model.summary()
 
     tb_freq = 4
     if os.path.isfile(os.path.join(prms_o['cp_path'], 'checkpoint')) is True:
         model.load_weights(prms_o['cp_path'] + '/cp-best.ckpt')
-        print('Epoch and Learning Rate loaded from Epoch ' + str(prms['ep']))
+        print('Resuming training from Epoch ' + str(prms['ep']))
 
-    loss_fcn = ls.loss(prms_o)
-    metric_fcn = ls.metric_fcns(prms_o, model)
-  
+    # loss_fcn = ls.loss(prms_o)
+    # metric_fcn = ls.metric_fcns(prms_o, model)
+    loss_fcn = ls.loss
+    metric_fcns = ls.metrics()
     model.compile(
-        # optimizer=optimizers.SGD(prms_o['learning_rate']), loss=loss_fcn, metrics=[metric_fcn])
+        optimizer=optimizers.Adam(prms_o['learning_rate']),loss=loss_fcn, metrics=metric_fcns)
+        # optimizer=optimizers.SGD(prms_o['learning_rate']), loss=loss_fcn, metrics=metric_fcns)
         # optimizer=optimizers.Nadam(prms_o['learning_rate']),loss=loss_fcn, metrics=[metric_fcn])
-        optimizer=optimizers.Adam(prms_o['learning_rate']),loss=loss_fcn, metrics=[metric_fcn])
+        # optimizer=optimizers.Adam(prms_o['learning_rate']),loss=loss_fcn)
+        # optimizer=optimizers.Adam(prms_o['learning_rate']),loss=loss_fcn, metrics=[metric_fcn])
        
     
     callbacks = airpi_callbacks(prms_o, prms_net, tb_freq, 1, tb_freq).as_list
@@ -54,7 +58,7 @@ if __name__ == '__main__':
     parser.add_argument('--depth', type=int, help='UNET levels')
     parser.add_argument('--stack_n', type=int, help='UNET conv layers per stack')
     parser.add_argument('--db_path', type=str, help='path to datasets')
-    parser.add_argument('--loss_prms_r', type=float, nargs=6, help='weight factors [px_p, px_a, px_pw, px_int, obj]') # the first parameter decide whether use data in r space for training, the rests specifies the weight
+    parser.add_argument('--loss_prms_r', type=float, nargs=7, help='weight factors [px_p, px_a, px_pw, px_int, obj]') # the first parameter decide whether use data in r space for training, the rests specifies the weight
     parser.add_argument('--loss_prms_k', type=float, nargs=7, help='weight factors [px_p, px_a, px_pw, px_int, int_tot, df_ratio]') # the first parameter decide whether use data in k space for training, the rests specifies the weight
     parser.add_argument('--bs', type=int, help='Batch Size')
     parser.add_argument('--lr', type=float, help='Learning Rate')
@@ -77,12 +81,13 @@ if __name__ == '__main__':
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args['gpu_id'])
 
+
     from tensorflow import config as tf_config
 
     # physical_devices = tf_config.experimental.list_physical_devices('GPU')
     # if len(physical_devices) > 0:
     #     tf_config.experimental.set_memory_growth(physical_devices[0], True)
-
+   
     from ap_utils.util_fcns import debugger_is_active, manage_args
     prms, prms_net = manage_args(args) 
 
@@ -96,11 +101,11 @@ if __name__ == '__main__':
     from ap_training.data_fcns import getDatasets
     from ap_training.callbacks import airpi_callbacks
     if prms_net['arch'] == 'UNET':
-        from ap_architectures.unet import UNET as NET
+        from ap_architectures.models import UNET as NET
     elif prms_net['arch'] == 'COMPLEX':
         from ap_architectures.complex_net import CNET as NET
     import ap_training.losses as ls
-
+    
     tf_config.run_functions_eagerly(debugger_is_active())
 
     fcn_train(prms, prms_net, NET)

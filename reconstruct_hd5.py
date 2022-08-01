@@ -3,7 +3,6 @@ import argparse
 import silence_tensorflow.auto
 import nvidia_smi
 
-
 def get_gpu_memory(n_gpu):
 
     nvidia_smi.nvmlInit()
@@ -14,16 +13,16 @@ def get_gpu_memory(n_gpu):
     return info
 
 
-def reconstruct_ds(ds_path, key, prms_net, rec_prms, skip=1, dose=None, save=False):
+def reconstruct_ds(ds_path, key, prms_net, rec_prms, options, skip=1, dose=None):
     (file, _) = os.path.splitext(ds_path)
     rec_prms['step_size'] *= skip
     nn_name = prms_net['cp_path'].split("/")[-1]
-    if save:
-        ds_ews_path = file + "_ews_" + nn_name + "_step_" + str((skip)) + "_dose_" + str((dose)) + ".h5"
+    if options['ew_ds_path'] is not None:
+        options['ew_ds_path'] = file + "_ews_" + nn_name + "_step_" + str((skip)) + "_dose_" + str((dose)) + ".h5"
     else:
-        ds_ews_path = None
+        options['ew_ds_path'] = None
     ds_class = airpi_dataset(rec_prms, ds_path, key, dose, step=skip, in_memory=False)
-    retrieve_phase_from_generator(ds_class, prms_net, rec_prms, ds_ews_path)
+    retrieve_phase_from_generator(ds_class, prms_net, options)
 
 
 def get_model_ckp(cp_path):
@@ -37,15 +36,19 @@ def get_model_ckp(cp_path):
 if __name__ == "__main__":
     os.system("clear")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dose", type=int, default=1000, help="Dose")
+    parser.add_argument("--dose", type=int, default=1e2, help="Dose")
     parser.add_argument("--ds", type=int, default=1, help="Dataset")
     parser.add_argument("--step", type=int, default=4, help="Step skip")
     parser.add_argument("--gpu_id", type=int, default=1, help="GPU")
     # parser.add_argument("--model", type=str, default='CNET_16_D4_e', help="GPU")
     # parser.add_argument("--model", type=str, default='CNET_32_D4_b', help="GPU")
-    parser.add_argument("--model", type=str, default='CNET_32_D3_f', help="GPU")
+    # parser.add_argument("--model", type=str, default='CNET_32_D3_f', help="GPU")
     # parser.add_argument("--model", type=str, default='V_32_D3_RLA_d_e2_skip', help="GPU")
-    # parser.add_argument("--model", type=str, default='CNET_32_D5b', help="GPU")
+    # parser.add_argument("--model", type=str, default='V_32_D4_RELU_BN_skip_f', help="GPU")
+    # parser.add_argument("--model", type=str, default='V_32_D3_RELU_GBN', help="GPU")
+    # parser.add_argument("--model", type=str, default='V_16_D3_N_sMAPE3_BN_SW_ld_64_sc', help="GPU")
+    parser.add_argument("--model", type=str, default='V_16_D3_N_sMAPE3_BN_SW_lld_RELU', help="GPU")
+    # parser.add_argument("--model", type=str, default='V_16_D3_N_sMAPE2', help="GPU")
     parser.add_argument("--ap_fcn", type=str, default='avrg', help="Aperture function estimation, gene: parameter generated, avrg: use PACBED")
     args = vars(parser.parse_args())
     dose = int(args["dose"])
@@ -62,8 +65,10 @@ if __name__ == "__main__":
         retrieve_phase_from_generator,
     )
     from ap_reconstruction.airpi_dataset import airpi_dataset
-    from ap_utils.util_fcns import load_hparams
+    from ap_utils.util_fcns import load_hparams, debugger_is_active
     prms_net = get_model_ckp(cp_path)
+
+    # from tensorflow import config as tf_config
 
     # twisted bilayer_graphene
     if ds == 0:
@@ -79,6 +84,7 @@ if __name__ == "__main__":
             "bfm_type": args["ap_fcn"],
             "oversample": 2.0,
         }
+        options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None}
 
     # MoS2
     if ds == 1:
@@ -90,10 +96,11 @@ if __name__ == "__main__":
             "gmax": 4.5714,
             "cbed_size": 128,
             "step_size": 0.05,
-            "aberrations": [14.0312, 1e-3],
+            "aberrations": [-1, 1e-3],
             "bfm_type": args["ap_fcn"],
             "oversample": 2.0,
         }
+        options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None}
 
     if ds == 2:
         # STO
@@ -105,11 +112,13 @@ if __name__ == "__main__":
             "apeture": 20.0,
             "gmax": 1.6671,
             "cbed_size": 64,
-            "step_size": 0.1818*2,
+            "step_size": 0.1818,
             "aberrations": [-1, 1e-3],
             "bfm_type": args["ap_fcn"],
-            "oversample": 2.0,
+            "oversample": 1.0,
         }
+        options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None}
+
     if ds == 3:
         # WS
         hd5_in = "/media/thomas/SSD/Samples/WS2/WS2_d0.h5"
@@ -124,6 +133,8 @@ if __name__ == "__main__":
             "bfm_type": args["ap_fcn"],
             "oversample": 1.0,
         }
+        options={'b_offset_correction':False, 'threads':8, 'ew_ds_path':None}
+
     if ds == 4:
         # Au
         # hd5_in = "/media/data/Samples/Au_big_crop2.h5"
@@ -139,6 +150,7 @@ if __name__ == "__main__":
             "bfm_type": args["ap_fcn"],
             "oversample": 2.0,
         }
+        options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None}
 
     if ds == 5:
         # In2Se3
@@ -154,6 +166,7 @@ if __name__ == "__main__":
             "bfm_type": args["ap_fcn"],
             "oversample": 1.0,
         }
+        options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None}
 
     # MoS2
     if ds == 6:
@@ -169,10 +182,11 @@ if __name__ == "__main__":
             "bfm_type": args["ap_fcn"],
             "oversample": 1,
         }
+        options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None}
 
     if ds == 7:
         # Au 2
-        hd5_in = "/media/data/Samples/Au_NPb.h5"
+        hd5_in = "/media/thomas/SSD/Samples/Au/Au_NPb.h5"
         # hd5_in = "/media/thomas/SSD/Samples/Au/Au_NP.h5"
         hd5_key = "ds"
         rec_prms = {
@@ -185,22 +199,23 @@ if __name__ == "__main__":
             "bfm_type": args["ap_fcn"],
             "oversample": 1.0,
         }
+        options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None}
 
     if ds == 8:
         # Z
-        hd5_in = "/media/thomas/SSD/Samples/Z/db_h5_6_sim.h5"
-        hd5_key = "amp"
+        hd5_in = "/media/thomas/SSD/Samples/MoS2/mos2_cornell.h5"
+        hd5_key = "ds"
         rec_prms = {
-            "E0": 200.0,
-            "apeture": 20.0,
+            "E0": 80.0,
+            "apeture": 21.4,
             "gmax": 0.7975,
             "cbed_size": 64,
             "step_size": 0.2,
             "aberrations": [-1, 1e-3],
-            "bfm_type": "gene",
-            "oversample": 2.0,
-            "order":['kx','ky','rx','ry']
+            "bfm_type":  args["ap_fcn"],
+            "oversample": 2.0
         }
+        options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None}
 
     if ds == 9:
         # WS2
@@ -216,6 +231,7 @@ if __name__ == "__main__":
             "bfm_type": args["ap_fcn"],
             "oversample": 1.0,
         }
+        options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None}
 
     if ds == 10:
         # WS2
@@ -231,7 +247,8 @@ if __name__ == "__main__":
             "bfm_type": args["ap_fcn"],
             "oversample": 1.0,
         }
+        options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None}
 
-    reconstruct_ds(hd5_in, hd5_key, prms_net, rec_prms, skip=int(args["step"]), dose=dose, save=False)
+    reconstruct_ds(hd5_in, hd5_key, prms_net, rec_prms, skip=int(args["step"]), dose=dose, options=options)
     print("done")
     quit()

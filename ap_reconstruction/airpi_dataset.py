@@ -8,7 +8,7 @@ import warnings
 
 from tqdm import tqdm
 from ap_reconstruction.tf_generator import tf_generator_ds, np_sequential_generator
-from ap_architectures.utils import tf_cast_complex, tf_probe_function, tf_mrad_2_rAng, tf_com, tf_FourierShift2D
+from ap_architectures.utils import fft2d, tf_cast_complex, tf_fft2d_A_p, tf_normalise_to_one, tf_normalise_to_one_amp, tf_probe_function, tf_mrad_2_rAng, tf_com, tf_FourierShift2D
 import tensorflow as tf
 class airpi_dataset:
     def __init__(self, rec_prms, file, key='fpd_expt/fpd_data/data', dose=None, in_memory=False, step=1):
@@ -85,7 +85,7 @@ class airpi_dataset:
         self.ds_dims = (self.rec_prms['ny'] , self.rec_prms['nx'], data.shape[self.rec_prms['dim_seq'][0]], data.shape[self.rec_prms['dim_seq'][1]])
         self.ds_seq = np_sequential_generator(data, self.ds_dims, self.step*5, scaling)
         self.get_bfm(self.rec_prms['bfm_type']) 
-        self.ds = tf_generator_ds(data, self.ds_dims, self.in_memory, self.rec_prms['beam_in_k'][...,0], self.step, self.dose, self.rec_prms['step_size'])
+        self.ds = tf_generator_ds(data, self.ds_dims, self.in_memory, self.rec_prms['beam_in_k'], self.step, self.dose, self.rec_prms['step_size'])
         
     
     def get_bfm(self, bfm_type, beam_in = None): 
@@ -109,10 +109,12 @@ class airpi_dataset:
             # com, offset = tf_com(msk[tf.newaxis,...])
             # beam_in_f = np.cast[np.complex](np.where(msk,0.0,1.0))
             probe = tf_probe_function(self.rec_prms['E0'] , self.rec_prms['apeture'] , self.rec_prms['gmax'] , self.ds_dims[2], self.rec_prms['aberrations'] , 'k', 'complex')
+            probe = tf_normalise_to_one_amp(probe)
             probe = tf_cast_complex(probe[...,0], probe[...,1])
             # probe = msk
             # probe = tf.squeeze(tf_FourierShift2D(probe[tf.newaxis,...], offset))
             self.rec_prms['beam_in_k']  = np.array(tf.stack((tf.math.abs(probe), tf.math.angle(probe)),axis=-1))
+            self.rec_prms['beam_in_r'] = tf_fft2d_A_p(self.rec_prms['beam_in_k'],complex_out=True)
         else:
             self.bfm = None
         

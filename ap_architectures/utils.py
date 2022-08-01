@@ -76,8 +76,9 @@ def tf_fft2d_A_p(A_p: tf.Tensor, complex_out:tf.bool=False) -> tf.Tensor:
     A_p[:, :, 0] = amplitude
     A_p[:, :, 1] = phase
     """
+    nx = tf.cast(tf.shape(A_p)[0],tf.complex64)
     A_p = tf_cast_complex(A_p[..., 0], A_p[..., 1])
-    A_p = tf.signal.fftshift(tf.signal.fft2d(tf.signal.ifftshift(A_p)))
+    A_p = tf.signal.fftshift(tf.signal.fft2d(tf.signal.ifftshift(A_p)))/nx
 
     if complex_out:
         return A_p
@@ -92,8 +93,9 @@ def tf_ifft2d_A_p(A_p: tf.Tensor, complex_out:tf.bool=False) -> tf.Tensor:
     A_p[:, :, 0] = amplitude
     A_p[:, :, 1] = phase
     """
+    nx = tf.cast(tf.shape(A_p)[0],tf.complex64)
     A_p = tf_cast_complex(A_p[..., 0], A_p[..., 1])
-    A_p = tf.signal.fftshift(tf.signal.ifft2d(tf.signal.ifftshift(A_p)))
+    A_p = tf.signal.fftshift(tf.signal.ifft2d(tf.signal.ifftshift(A_p)))*nx
     if complex_out:
         return A_p
     else:
@@ -195,7 +197,7 @@ def tf_normalise_to_one(wave_int: tf.Tensor) -> tf.Tensor:
 
 
 @tf.function
-def tf_normalise_to_one_amp(wave_amp: tf.Tensor) -> tf.Tensor:
+def tf_normalise_to_one_amp(wave: tf.Tensor) -> tf.Tensor:
     """
     Normalise wave function amplitude to Intensity = 1, using tensorflow
     Input:
@@ -203,9 +205,22 @@ def tf_normalise_to_one_amp(wave_amp: tf.Tensor) -> tf.Tensor:
     Output:
         wave_amp: normalised wave function amplitude
     """
-    wave_int = wave_amp**2
-    wave_int = wave_int / tf.reduce_sum(wave_int)
-    return tf.math.sqrt(wave_int)
+    wave_int =  wave[...,0]**2
+    wave_amp =  tf.math.sqrt(wave_int / tf.reduce_sum(wave_int))
+    return tf.stack([wave_amp, wave[...,1]], axis=-1)
+
+@tf.function
+def tf_normalise_to_one_complex(wave: tf.Tensor) -> tf.Tensor:
+    """
+    Normalise wave function amplitude to Intensity = 1, using tensorflow
+    Input:
+        wave: wave function complex
+    Output:
+        wave_amp: normalised wave function complex
+    """
+    wave_int =  tf.math.abs(wave)**2
+    wave_amp =  tf.math.sqrt(wave_int / tf.reduce_sum(wave_int))
+    return tf_cast_complex(wave_amp, tf.math.angle(wave))
 
 
 @tf.function
@@ -332,14 +347,17 @@ def tf_switch_space(wave, space="k"):
         amp: amplitude
         phase: phase
     """
-    amp = tf.maximum(0.0, tf.math.abs(wave))
+    # amp = tf.math.abs(wave)
     if space == "r":
-        wave_new = tf_fft2d(wave)
+        wave_new = tf_fft2d(wave)/64
     elif space == "k":
-        wave_new = tf_ifft2d(wave)
-    amp_new = tf.abs(wave_new)
-    amp_new *= tf.reduce_sum(amp) / tf.reduce_sum(amp_new)
+        wave_new = tf_ifft2d(wave)*64
+    # scale = tf.reduce_sum(amp) / tf.reduce_sum(amp_new)
+    # scale = tf.reduce_sum(amp,axis=[-1,-2],keepdims=True) / tf.reduce_sum(amp_new,axis=[-1,-2],keepdims=True)
+    # amp_new *= scale
+    amp_new = tf.math.abs(wave_new)
     phase_new = tf.math.angle(wave_new)
+
     return amp_new, phase_new
 
 
@@ -397,29 +415,64 @@ def pred_dict(y_tensor, btw_filt=None):
     r = dict()
     k = dict()
     y_tensor = tf.where(tf.math.is_nan(y_tensor), tf.zeros_like(y_tensor), y_tensor)
+    k["amp_sc"] = y_tensor[...,0]
+    k['phase'] = y_tensor[...,1]
+    k["amp"] = k["amp_sc"]**5
+    k['wv'] = tf_cast_complex(k["amp"], k['phase'])
+    k["int"] = tf.math.pow(k["amp"],2)
+    k["sin"], k["cos"] = tf_sin_cos_decomposition(k["phase"])
 
-    k["amp_sc"], k["sin"], k["cos"] = tf.unstack(y_tensor, axis=-1)
-    k["amp"] = tf.math.pow(k["amp_sc"],5)
-    # if btw_filt is not None:
-    #     k["amp"] *= btw_filt
-    k["phase"] = tf_sin_cos2rad(k["sin"], k["cos"])
-    kw = tf_cast_complex(k["amp"], k["phase"])
-    k["int"] = tf.math.pow(tf.math.abs(kw),2)
-    k["r"] = tf.math.real(kw)
-    k["i"] = tf.math.imag(kw)
-
-    r["amp"], r["phase"] = tf_switch_space(kw, space="k")
-    r["sin"], r["cos"] = tf_sin_cos_decomposition(r["phase"])
+    r["amp"], r["phase"] = tf_switch_space(k['wv'], space="r")
     r["wv"] = tf_cast_complex(r["amp"], r["phase"])
-    r["int"] = tf.math.abs(tf.math.pow(r["wv"],2))
-    r["r"] = tf.math.real(r["wv"])
-    r["i"] = tf.math.imag(r["wv"])
-    
-    r["amp"] = tf.where(tf.math.is_nan(r["amp"]), tf.zeros_like(r["amp"]), r["amp"])
-    r["int"] = tf.where(tf.math.is_nan(r["int"]), tf.zeros_like(r["int"]), r["int"])
     r["amp_sc"] = tf.math.pow(r["amp"],0.2)
+    r["sin"], r["cos"] = tf_sin_cos_decomposition(r["phase"])
+    r["int"] = tf.math.abs(tf.math.pow(r["wv"],2))
 
     return r, k
+
+# @tf.function
+# def pred_dict(y_tensor, btw_filt=None):
+#     """
+#     create a dictionary of predicted results for use in differnt metrics and loss functions, using tensorflow.
+#     Input:
+#         y_tensor: tensor of predicted results (NN output)
+#     Output:
+#         r: dictionary of predicted results in real space
+#         k: dictionary of predicted results in k-space
+#         Each dictionary contains:
+#             amp: amplitude
+#             phase: phase
+#             r: real part
+#             i: imaginary part
+#             sin: sinusoidal part of phase
+#             cos: cosine part of phase
+#     """
+#     r = dict()
+#     k = dict()
+#     y_tensor = tf.where(tf.math.is_nan(y_tensor), tf.zeros_like(y_tensor), y_tensor)
+
+#     k["amp_sc"], k["sin"], k["cos"] = tf.unstack(y_tensor, axis=-1)
+#     k["amp"] = tf.math.pow(k["amp_sc"],5)
+#     # if btw_filt is not None:
+#     #     k["amp"] *= btw_filt
+#     k["phase"] = tf_sin_cos2rad(k["sin"], k["cos"])
+#     kw = tf_cast_complex(k["amp"], k["phase"])
+#     k["int"] = tf.math.pow(tf.math.abs(kw),2)
+#     # k["r"] = tf.math.real(kw)
+#     # k["i"] = tf.math.imag(kw)
+
+#     r["amp"], r["phase"] = tf_switch_space(kw, space="k")
+#     r["sin"], r["cos"] = tf_sin_cos_decomposition(r["phase"])
+#     r["wv"] = tf_cast_complex(r["amp"], r["phase"])
+#     r["int"] = tf.math.abs(tf.math.pow(r["wv"],2))
+#     # r["r"] = tf.math.real(r["wv"])
+#     # r["i"] = tf.math.imag(r["wv"])
+    
+#     r["amp"] = tf.where(tf.math.is_nan(r["amp"]), tf.zeros_like(r["amp"]), r["amp"])
+#     r["int"] = tf.where(tf.math.is_nan(r["int"]), tf.zeros_like(r["int"]), r["int"])
+#     r["amp_sc"] = tf.math.pow(r["amp"],0.2)
+
+#     return r, k
 
 
 @tf.function
@@ -427,7 +480,7 @@ def true_dict(y_tensor):
     """
     create a dictionary of true results for use in differnt metrics and loss functions, using tensorflow.
     Input:
-        y_tensor: tensor of true results (NN output)
+        y_tensor: tensor of true results
     Output:
         r: dictionary of true results in real space
         k: dictionary of true results in k-space
@@ -442,25 +495,26 @@ def true_dict(y_tensor):
     r = dict()
     k = dict()
 
-    k["amp"], k["phase"], r["amp"], r["phase"], probe, probe_phase = tf.unstack(y_tensor, axis=-1)
+    k["amp"], k["phase"], r["amp"], r["phase"], probe, probe_phase, msk_r, msk_k = tf.unstack(y_tensor, axis=-1)
     k["amp_sc"] = k["amp"] ** 0.2
     kw = tf_cast_complex(k["amp"], k["phase"])
     r["probe"] = tf_cast_complex(probe, probe_phase)
     k["probe"], _ = tf_switch_space(r["probe"], space="r")
     k["int"] = tf.math.abs(kw) ** 2
     k["sin"], k["cos"] = tf_sin_cos_decomposition(k["phase"])
-    k["r"] = tf.math.real(kw)
-    k["i"] = tf.math.imag(kw)
+    k['msk'] = tf.cast(msk_k,tf.float32)
+    # k["r"] = tf.math.real(kw)
+    # k["i"] = tf.math.imag(kw)
 
     rw = tf_cast_complex(r["amp"], r["phase"])
     r["int"] = tf.math.abs(rw) ** 2
     r["sin"], r["cos"] = tf_sin_cos_decomposition(r["phase"])
-    r["r"] = tf.math.real(rw)
-    r["i"] = tf.math.imag(rw)
+    # r["r"] = tf.math.real(rw)
+    # r["i"] = tf.math.imag(rw)
     r["obj"] = tf.math.angle(rw/r["probe"])
     r["obj"] = tf.where(tf.math.is_nan(r["obj"]), tf.zeros_like(r["obj"]), r["obj"])
     r["amp_sc"] = r["amp"] ** 0.2
-    
+    r['msk'] = tf.cast(msk_r,tf.float32)
     return r, k
 
 
@@ -509,6 +563,57 @@ def pad2d(x: tf.Tensor, pad):
 
     return x
 
+@tf.function
+def tf_bessel_root(E0, conv_angle):
+    """
+    Compute the 0th root of the Bessel function of the first kind.
+    Inputs:
+        E0: Energy in keV
+        conv_angle: Convergence angle in mrad
+    Outputs:
+        root: Root of the Bessel function of the first kind
+    """
+    rA = tf_mrad_2_rAng(E0, conv_angle) * 2
+    root = (3.8317 / rA) / tf_pi
+    return root
+
+@tf.function
+def tf_g_space(E0, gmax, nx, unit="mrad"):
+
+    if unit == "mrad":
+        lim = tf_rAng_2_mrad(E0, gmax)
+    else:
+        lim = gmax
+
+    px_1 = tf.linspace(-lim, 0.0, tf.cast(nx / 2.0 + 1, tf.int32))
+    px_2 = tf.linspace(px_1[-2], px_1[1], tf.cast(nx / 2.0 - 1, tf.int32))
+    px = tf.concat([px_1, px_2], 0)
+    y, x = tf.meshgrid(px, px)
+
+    r = (x**2.0 + y**2.0) ** 0.5
+    return r
+
+@tf.function
+def tf_binary_mask_r(E0, conv_angle, gmax, nx):
+    """
+    Compute the binary mask for the real space probe.
+    Inputs:
+        E0: Energy in keV
+        conv_angle: Convergence angle in mrad
+        gmax: Maximum radius of the mask in m
+        nx: Number of pixels in the mask
+    Outputs:
+        mask: Binary mask of the real space probe
+    """
+
+    root = tf_bessel_root(E0, conv_angle)
+    r = tf_g_space(E0, gmax, nx, unit="rAng")
+    mask_r = tf.where((r <= root), 1.0, 0.0)
+    return mask_r
+
+
+    mask = tf.math.less_equal(tf.math.abs(tf.math.sqrt(tf.math.abs(rA))), gmax * root)
+    return mask
 
 @tf.function
 def tf_FourierShift2D(x: tf.Tensor, delta: tf.Tensor) -> tf.Tensor:

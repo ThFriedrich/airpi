@@ -1,7 +1,7 @@
 """Module containing Functions for Tensorflow Training and Grid Search"""
 import numpy as np
 import tensorflow as tf
-from ap_architectures.utils import tf_binary_mask, tf_fft2d_A_p, tf_pi, tf_probe_k, tf_rAng_2_mrad
+from ap_architectures.utils import tf_binary_mask, tf_binary_mask_r, tf_ifft2d_A_p, tf_normalise_to_one_amp, tf_pi, tf_probe_k
 import h5py
 
 from ap_utils.util_fcns import PRM
@@ -120,7 +120,7 @@ def fcn_decode_h5(fea, lab_k, lab_r, prob_r, met):
 
 
 @tf.function
-def fcn_rnd_no_sample(x, yk, probe, p):
+def fcn_rnd_no_sample(x, yk, yr, probe, p):
     rnd = tf.random.uniform([])
     x = tf.cond(
         tf.greater(p, rnd),
@@ -128,32 +128,25 @@ def fcn_rnd_no_sample(x, yk, probe, p):
         lambda: x,
     )
     yk = tf.cond(tf.greater(p, rnd), lambda: probe, lambda: yk)
+    yr = tf.cond(tf.greater(p, rnd), lambda: tf_ifft2d_A_p(tf_normalise_to_one_amp(yk)), lambda: yr)
+    return x, yk, yr
 
-    return x, yk
-
-@tf.function
-def add_binary_mask(x:tf.Tensor, prob_r:tf.Tensor) -> tf.Tensor:
-    prob_k = tf_fft2d_A_p(prob_r)
-    b_msk = tf_binary_mask(prob_k[...,0],threshold=0.05)
-    x = tf.concat([x, b_msk[...,tf.newaxis]], -1)
-
-    return x
 
 @tf.function
-def add_binary_mask_gen(x:tf.Tensor, prms:tf.Tensor) -> tf.Tensor:
-    px_k =  tf_rAng_2_mrad(prms[0],prms[2]/64)*2
-    prob_k = tf_probe_k(prms[0], prms[1]+px_k, prms[2], 64, [-1, 0.001])[0]
-    x = tf.concat([x, prob_k[...,tf.newaxis]], -1)
-    return x
+def comp_probe_k(x:tf.Tensor, prms:tf.Tensor) -> tf.Tensor:
+    # px_k =  tf_rAng_2_mrad(prms[0],prms[2]/64)*2
+    a, p = tf_probe_k(prms[0], prms[1], prms[2], 64, [-1, 0.001])
+    pr = tf.stack([a, p], axis=-1)
+    return tf_normalise_to_one_amp(pr)
 
 @tf.function
 def fcn_decode_train(x, lab_k, lab_r, prob_r, prms):
     """Decoding/Preprocessing of HDF5 Dataset for Training (random Poisson)"""
-    # x, lab_k, lab_r, prob_r, _ = fcn_decode_tfrecords(fea, lab_k, lab_r, prob_r, met)
-    # x, lab_k, lab_r, prob_r, _ = fcn_decode_h5(fea, lab_k, lab_r, prob_r, met)
 
+    probe_k = comp_probe_k(x, prms)
+    
     # Random no-sample
-    x, lab_k = fcn_rnd_no_sample(x, lab_k, tf_fft2d_A_p(prob_r), 0.03)
+    x, lab_k, lab_r = fcn_rnd_no_sample(x, lab_k, lab_r, probe_k, 0.03)
 
     # Add Poisson Noise for random dose
     rnd = tf.random.uniform([1], minval=0, maxval=len(PRM.dose), dtype=tf.int32)
@@ -163,10 +156,12 @@ def fcn_decode_train(x, lab_k, lab_r, prob_r, prms):
     if PRM.scale_cbeds:
         x = fcn_weight_cbeds(x, prms[3])
 
-    x = add_binary_mask_gen(x, prms)
-    # x = add_binary_mask(x, prob_r)
-
-    y = tf.concat([lab_k, lab_r, prob_r], -1)
+    x = tf.concat([x, probe_k], -1)
+    # x = tf.concat([x, probe_k[...,0,tf.newaxis]], -1)
+    
+    msk_k = tf_binary_mask(probe_k[...,0])[...,tf.newaxis]
+    msk_r = tf_binary_mask_r(prms[0], prms[1], prms[2], 64)[...,tf.newaxis]
+    y = tf.concat([lab_k, lab_r, prob_r, msk_r, msk_k], -1)
 
     return x, y
 
@@ -191,9 +186,13 @@ def fcn_decode_val(x, lab_k, lab_r, prob_r, prms):
     if PRM.scale_cbeds:
         x = fcn_weight_cbeds(x, prms[3])
 
-    # x = add_binary_mask(x, prob_r)
-    x = add_binary_mask_gen(x, prms)
-    y = tf.concat([lab_k, lab_r, prob_r], -1)
+    probe_k = comp_probe_k(x, prms)
+    x = tf.concat([x, probe_k], -1)
+    # x = tf.concat([x, probe_k[...,0,tf.newaxis]], -1)
+    
+    msk_k = tf_binary_mask(probe_k[...,0])[...,tf.newaxis]
+    msk_r = tf_binary_mask_r(prms[0], prms[1], prms[2], 64)[...,tf.newaxis]
+    y = tf.concat([lab_k, lab_r, prob_r, msk_r, msk_k], -1)
 
     return x, y
 
@@ -247,7 +246,7 @@ def datasetPipeline(filepaths, is_training, prms):
 
 def getDatasets(prms):
     if PRM.debug:
-        n_train_data = 2048
+        n_train_data = 128
     else:
         n_train_data = PRM.n_train
 

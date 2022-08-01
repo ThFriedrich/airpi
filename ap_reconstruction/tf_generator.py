@@ -51,7 +51,6 @@ class tf_generator:
         # Pad last row with empty cbeds
         self.rw = np.roll(self.rw,-1,axis=1)
         self.rw[1:self.size_in[0]+1,2,...] = load_dat
-        # self.rw[:,2,...] = 0
         self.q_row.put((self.rw, rw_i+1))
         self.rows_finished.set()
 
