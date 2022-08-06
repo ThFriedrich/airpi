@@ -1,13 +1,11 @@
 
 import tensorflow as tf
-from ap_architectures.utils import tf_pi
-from tensorflow import keras as tfk
+from ap_utils.functions import tf_pi
+from tensorflow.keras import layers as kl, activations as ka
 from tensorflow_addons.layers import InstanceNormalization, GroupNormalization
 
-kl = tfk.layers
 
-
-class Amplitude_Output(tfk.layers.Layer):
+class Amplitude_Output(kl.Layer):
     """Layer that creates an activity sparsity regularization loss."""
 
     def __init__(self, b_skip=True):
@@ -40,7 +38,7 @@ class Amplitude_Output(tfk.layers.Layer):
         return x
         
 
-class Phase_Output(tfk.layers.Layer):
+class Phase_Output(kl.Layer):
     """Layer that creates an activity sparsity regularization loss."""
 
     def __init__(self, b_skip=True):
@@ -78,7 +76,7 @@ class Phase_Output(tfk.layers.Layer):
 
         return x
 
-class Deploy_Output(tfk.layers.Layer):
+class Deploy_Output(kl.Layer):
     """Layer that creates an activity sparsity regularization loss."""
 
     def __init__(self):
@@ -96,7 +94,7 @@ class Deploy_Output(tfk.layers.Layer):
         x = self.cast(x)
         return x
 
-class Standardization_Layer(tfk.layers.Layer):
+class Standardization_Layer(kl.Layer):
     """Layer that creates an activity sparsity regularization loss."""
 
     def __init__(self):
@@ -127,7 +125,7 @@ class Standardization_Layer(tfk.layers.Layer):
         return self.x_normalise(x)
 
 
-class Block_Normalization(tfk.layers.Layer):
+class Block_Normalization(kl.Layer):
     """Layer that creates an activity sparsity regularization loss."""
 
     def __init__(self, momentum=0.9, epsilon=1e-8):
@@ -158,7 +156,7 @@ class Block_Normalization(tfk.layers.Layer):
         return self.normalize(x, training)
 
 
-class Grouped_Batch_Normalization(tfk.layers.Layer):
+class Grouped_Batch_Normalization(kl.Layer):
     """Layer that creates an activity sparsity regularization loss."""
 
     def __init__(self, groups=2):
@@ -178,7 +176,7 @@ class Grouped_Batch_Normalization(tfk.layers.Layer):
         return self.normalise(x, training)
 
 
-class Convolution_Block(tfk.layers.Layer):
+class Convolution_Block(kl.Layer):
     """Layer implementing a sequence of 2D-Convolution, normalization and activation."""
 
     def __init__(self, filters=None, kernel_size=[3, 3], strides=[1, 1], padding='same', activation=5, normalization=5, dropout=None, initializer='glorot_uniform', kernel_regularizer=None, activity_regularizer=None, transpose=False):
@@ -195,7 +193,12 @@ class Convolution_Block(tfk.layers.Layer):
         self.activity_regularizer = activity_regularizer
         self.transpose = transpose
 
-        self.dropout_layer = kl.Dropout(self.dropout)
+        if dropout is not None and dropout > 0.0:
+            self.dropout_layer = kl.Dropout(self.dropout)
+        else:
+            self.dropout_layer = None
+
+        
 
         if self.activation == 0:
             self.activation_layer = None
@@ -204,7 +207,7 @@ class Convolution_Block(tfk.layers.Layer):
         elif self.activation == 2:
             self.activation_layer = kl.ELU()
         elif self.activation == 3:
-            self.activation_layer = tfk.activations.swish
+            self.activation_layer = ka.swish
         elif self.activation == 5:
             self.activation_layer = kl.ReLU()
         else:
@@ -229,7 +232,7 @@ class Convolution_Block(tfk.layers.Layer):
         if self.filters is None:
             self.filters = input_shape[-1]
         if self.transpose:
-            self.conv2d = tfk.layers.Conv2DTranspose(self.filters, kernel_size=self.kernel_size, strides=self.strides, padding=self.padding,
+            self.conv2d = kl.Conv2DTranspose(self.filters, kernel_size=self.kernel_size, strides=self.strides, padding=self.padding,
                                                      kernel_regularizer=self.kernel_regularizer, activity_regularizer=self.activity_regularizer, kernel_initializer=self.initializer,
                                                      activation=None, dtype=tf.float32)
         else:
@@ -243,12 +246,12 @@ class Convolution_Block(tfk.layers.Layer):
             x = self.normalization_layer(x, training)
         if self.activation_layer is not None:
             x = self.activation_layer(x)
-        if self.dropout is not None:
+        if self.dropout_layer is not None:
             x = self.dropout_layer(x)
         return x
 
 
-class Conv_Stack(tfk.layers.Layer):
+class Conv_Stack(kl.Layer):
     """Layer implementing a sequence of 2D-Convolution, normalization and activation."""
 
     def __init__(self, n_blocks=3, filters=None, kernel_size=[3,3], strides=[1,1], padding='same', activation=5, normalization=5, dropout=None, initializer='glorot_uniform', kernel_regularizer=None, activity_regularizer=None):
@@ -280,7 +283,7 @@ class Conv_Stack(tfk.layers.Layer):
         return x
 
 
-class Contraction_Block(tfk.layers.Layer):
+class Contraction_Block(kl.Layer):
     """Layer implementing a sequence of 2D-Convolution, normalization and activation."""
 
     def __init__(self, n_blocks=3, kernel_size=[3, 3], padding='same', activation=5, normalization=5, dropout=None, initializer='glorot_uniform', kernel_regularizer=None, activity_regularizer=None, contraction_fct=2):
@@ -312,7 +315,7 @@ class Contraction_Block(tfk.layers.Layer):
         return x, c
 
 
-class Expansion_Block(tfk.layers.Layer):
+class Expansion_Block(kl.Layer):
     """Layer implementing a sequence of 2D-Convolution, normalization and activation."""
 
     def __init__(self, n_blocks=3, kernel_size=[3, 3], padding='same', activation=5, normalization=5, dropout=None, initializer='glorot_uniform', kernel_regularizer=None, activity_regularizer=None, expansion_fct=2):
@@ -333,11 +336,11 @@ class Expansion_Block(tfk.layers.Layer):
         nf = int(input_shape[-1]//self.expansion_fct)
         self.expansion = Convolution_Block(filters=nf,  kernel_size=self.kernel_size, strides=self.strides, padding=self.padding,
                                              kernel_regularizer=self.kernel_regularizer, activity_regularizer=self.activity_regularizer, initializer=self.initializer,
-                                             activation=self.activation,normalization=self.normalization,transpose=True)
+                                             activation=self.activation,normalization=self.normalization,transpose=True, dropout=self.dropout)
         self.conv_stack = Conv_Stack(filters=nf, n_blocks=self.n_blocks, kernel_size=self.kernel_size, strides=[1,1], padding=self.padding,
                                      kernel_regularizer=self.kernel_regularizer, activity_regularizer=self.activity_regularizer, initializer=self.initializer,
-                                     activation=self.activation,normalization=self.normalization)
-        self.concatenation = tfk.layers.Concatenate()
+                                     activation=self.activation,normalization=self.normalization, dropout=self.dropout)
+        self.concatenation = kl.Concatenate()
 
     def call(self, x, c, training=False):
         x = self.expansion(x, training)

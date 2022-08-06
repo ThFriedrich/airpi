@@ -1,4 +1,3 @@
-from tensorflow.keras.utils import plot_model
 import tensorflow as tf
 from numpy import sqrt
 from math import pi
@@ -16,7 +15,7 @@ em2 = tf.constant(1021.9979, dtype=tf.float32)
 # Planck's constant * speed of light
 hc = tf.constant(12.3984244, dtype=tf.float32)
 
-# @tf.function
+
 def interp2dcomplex(y_cpx=None, y_amp=None, y_phase=None, out_size=[64,64], output='complex'):
     '''
     Interpolate complex data
@@ -57,19 +56,19 @@ def ifft2d(A):
     return fftshift(ifft2(ifftshift(A)))
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_fft2d(two_d_array):
     """2D Fourier Transform using tensorflow"""
     return tf.signal.fftshift(tf.signal.fft2d(tf.signal.ifftshift(two_d_array)))
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_ifft2d(two_d_array):
     """2D Inverse Fourier Transform using tensorflow"""
     return tf.signal.fftshift(tf.signal.ifft2d(tf.signal.ifftshift(two_d_array)))
 
 
-@tf.function
+@tf.function(jit_compile=False)
 def tf_fft2d_A_p(A_p: tf.Tensor, complex_out:tf.bool=False) -> tf.Tensor:
     """
     Fourier Transform of a 2d wave function as 3d array A_p, with shape (n_x, n_y, 2)
@@ -86,7 +85,7 @@ def tf_fft2d_A_p(A_p: tf.Tensor, complex_out:tf.bool=False) -> tf.Tensor:
         return tf.stack([tf.math.abs(A_p), tf.math.angle(A_p)], axis=-1)
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_ifft2d_A_p(A_p: tf.Tensor, complex_out:tf.bool=False) -> tf.Tensor:
     """
     Inverse Fourier Transform of a 2d wave function as 3d array A_p, with shape (n_x, n_y, 2)
@@ -102,7 +101,7 @@ def tf_ifft2d_A_p(A_p: tf.Tensor, complex_out:tf.bool=False) -> tf.Tensor:
         return tf.stack([tf.math.abs(A_p), tf.math.angle(A_p)], axis=-1)
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_rAng_2_mrad(E0: tf.Tensor, rA: tf.Tensor) -> tf.Tensor:
     """
     Conversion of reciprocal Angstrom to mrad
@@ -125,20 +124,7 @@ def rAng_2_mrad(E0: float, rA: float) -> float:
     return rA * la / 1e-3
 
 
-def plot_graph(model, name):
-    """Plot graph of model"""
-    plot_model(
-        model,
-        to_file=name,
-        show_shapes=True,
-        show_layer_names=True,
-        rankdir="TB",
-        expand_nested=False,
-        dpi=96,
-    )
-
-
-@tf.function
+@tf.function(jit_compile=True)
 def tf_pow01(x: tf.Tensor) -> tf.Tensor:
     """
     Raise tensor x to the power of 0.1
@@ -169,7 +155,7 @@ def tf_sin_cos2rad(si, co):
     return theta
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_sin_cos_decomposition(phase):
     """
     Decomposition of phase into sine and cosine, using tensorflow
@@ -184,7 +170,7 @@ def tf_sin_cos_decomposition(phase):
     return l_sin, l_cos
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_normalise_to_one(wave_int: tf.Tensor) -> tf.Tensor:
     """
     Normalise wave function intensity to 1, using tensorflow
@@ -196,7 +182,7 @@ def tf_normalise_to_one(wave_int: tf.Tensor) -> tf.Tensor:
     return wave_int / tf.reduce_sum(wave_int)
 
 
-@tf.function
+@tf.function(jit_compile=False)
 def tf_normalise_to_one_amp(wave: tf.Tensor) -> tf.Tensor:
     """
     Normalise wave function amplitude to Intensity = 1, using tensorflow
@@ -209,7 +195,7 @@ def tf_normalise_to_one_amp(wave: tf.Tensor) -> tf.Tensor:
     wave_amp =  tf.math.sqrt(wave_int / tf.reduce_sum(wave_int))
     return tf.stack([wave_amp, wave[...,1]], axis=-1)
 
-@tf.function
+@tf.function(jit_compile=False)
 def tf_normalise_to_one_complex(wave: tf.Tensor) -> tf.Tensor:
     """
     Normalise wave function amplitude to Intensity = 1, using tensorflow
@@ -223,7 +209,7 @@ def tf_normalise_to_one_complex(wave: tf.Tensor) -> tf.Tensor:
     return tf_cast_complex(wave_amp, tf.math.angle(wave))
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_mrad_2_rAng(E0: tf.Tensor, th: tf.Tensor) -> tf.Tensor:
     """
     Conversion of mrad to reciprocal Angstrom, using tensorflow
@@ -237,7 +223,7 @@ def tf_mrad_2_rAng(E0: tf.Tensor, th: tf.Tensor) -> tf.Tensor:
     return th * 1e-3 / la
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_scherzer_df(E0: tf.Tensor, C3) -> tf.Tensor:
     """
     Compute Scherzer defocus, using tensorflow
@@ -252,7 +238,7 @@ def tf_scherzer_df(E0: tf.Tensor, C3) -> tf.Tensor:
     return C1
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_aberration(
     E0: tf.Tensor, ab: tf.Tensor, x: tf.Tensor, y: tf.Tensor
 ) -> tf.Tensor:
@@ -284,7 +270,7 @@ def tf_aberration(
     return -1 * phase
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_probe_k(
     E0: tf.Tensor,
     aperture: tf.Tensor,
@@ -307,7 +293,7 @@ def tf_probe_k(
     return mask_k_i, mask_k_p
 
 
-@tf.function
+@tf.function(jit_compile=False)
 def tf_probe_function(
     E0: tf.Tensor,
     aperture: tf.Tensor,
@@ -336,7 +322,7 @@ def tf_probe_function(
             return tf.stack([mask_r_i, mask_r_p], -1)
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_switch_space(wave, space="k"):
     """
     Switch between k-space and r-space, using tensorflow
@@ -361,7 +347,7 @@ def tf_switch_space(wave, space="k"):
     return amp_new, phase_new
 
 
-@tf.function
+@tf.function(jit_compile=False)
 def tf_cast_complex(amp: tf.Tensor, phase: tf.Tensor) -> tf.Tensor:
     """
     Cast amplitude and phase to complex number, using tensorflow
@@ -373,7 +359,7 @@ def tf_cast_complex(amp: tf.Tensor, phase: tf.Tensor) -> tf.Tensor:
     """
     return tf.cast(amp, tf.complex64) * tf.math.exp(tf.cast(phase, tf.complex64) * 1j)
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_binary_mask(probe_k:tf.Tensor, threshold:float = 0.5) -> tf.Tensor:
     """
     Generate binary mask from probe_k
@@ -395,7 +381,7 @@ def tf_binary_mask(probe_k:tf.Tensor, threshold:float = 0.5) -> tf.Tensor:
     return mask
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def pred_dict(y_tensor, btw_filt=None):
     """
     create a dictionary of predicted results for use in differnt metrics and loss functions, using tensorflow.
@@ -431,7 +417,7 @@ def pred_dict(y_tensor, btw_filt=None):
     return r, k
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def true_dict(y_tensor):
     """
     create a dictionary of true results for use in differnt metrics and loss functions, using tensorflow.
@@ -473,7 +459,7 @@ def true_dict(y_tensor):
     return r, k
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_com(images):
     """
     Compute centre of mass of images, using tensorflow
@@ -499,7 +485,7 @@ def tf_com(images):
     return com, offset
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def pad2d(x: tf.Tensor, pad):
     """
     Adds zero-padding to a 2D or 3D tensor.
@@ -518,7 +504,7 @@ def pad2d(x: tf.Tensor, pad):
 
     return x
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_bessel_root(E0, conv_angle):
     """
     Compute the 0th root of the Bessel function of the first kind.
@@ -532,7 +518,7 @@ def tf_bessel_root(E0, conv_angle):
     root = (3.8317 / rA) / tf_pi
     return root
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_g_space(E0, gmax, nx, unit="mrad"):
 
     if unit == "mrad":
@@ -548,7 +534,7 @@ def tf_g_space(E0, gmax, nx, unit="mrad"):
     r = (x**2.0 + y**2.0) ** 0.5
     return r
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_binary_mask_r(E0, conv_angle, gmax, nx):
     """
     Compute the binary mask for the real space probe.
@@ -570,7 +556,7 @@ def tf_binary_mask_r(E0, conv_angle, gmax, nx):
     mask = tf.math.less_equal(tf.math.abs(tf.math.sqrt(tf.math.abs(rA))), gmax * root)
     return mask
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_FourierShift2D(x: tf.Tensor, delta: tf.Tensor) -> tf.Tensor:
     """
     `tf_FourierShift2D(x, delta)`
@@ -681,7 +667,7 @@ def tf_FourierShift2D(x: tf.Tensor, delta: tf.Tensor) -> tf.Tensor:
     return y
 
 
-# @tf.function
+# @tf.function(jit_compile=True)
 def tf_butterworth_filter2D(im_size, cutoff, order=5, shape="ci"):
     """
     `tf_butterworth_filter2D(im_size, cutoff, order, shape)`

@@ -1,11 +1,11 @@
 import numpy as np
 from threading import Thread
-from multiprocessing import Queue, Process, Event
+from multiprocessing import Queue, Event
 import matplotlib.pyplot as plt
 from ap_training.data_fcns import fcn_weight_cbeds
 from tensorflow.data import Dataset as tf_ds
 from tensorflow.random import poisson as tf_poiss
-from tensorflow import int32, float32, squeeze, math, image, transpose
+from tensorflow import int32, float32, squeeze, image, transpose
 
 class tf_generator:
     '''Generator that keeps the HDF5-DB open and reads chunk-by-chunk'''

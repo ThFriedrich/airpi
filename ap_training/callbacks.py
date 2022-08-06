@@ -10,9 +10,9 @@ from ap_reconstruction.airpi_dataset import airpi_dataset
 from numpy import cast, ceil, angle
 
 from ap_training.data_fcns import getTestDataset
-from ap_training.lr_scheduler import lr_schedule
-from ap_utils.util_fcns import PRM, fcn_plot_example, save_hparams, fcn_plot_nn_in_out
-
+from ap_utils.file_ops import save_hparams
+from ap_utils.plotting import fcn_plot_example, fcn_plot_nn_in_out
+from ap_utils.globals import PRM
 
 class airpi_callbacks:
     def __init__(self, prms_o, prms_net):
@@ -74,7 +74,7 @@ class airpi_callbacks:
                 "gmax": 2.5,
                 "cbed_size": 128,
                 "step_size": 0.2,
-                "aberrations": [-1, 0.001],
+                "aberrations": [-1, 1e-3],
                 "bfm_type": 'avrg',
                 "oversample": 2.0,
                 "step":1,

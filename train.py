@@ -5,25 +5,24 @@ import silence_tensorflow.auto
 
 def fcn_train(prms_o, prms_net, NET):
     '''Train the Network'''
+    from tensorflow.keras import optimizers
+    from tensorflow.data.experimental import AUTOTUNE
+    from ap_training.data_fcns import getDatasets
+    import ap_training.losses as ls
 
     training_ds, validation_ds, validation_steps, steps_per_epoch = getDatasets(prms_o)
 
     model = NET(prms_net, training_ds._flat_shapes[0][1:4]).build()
     model.summary()
 
-    tb_freq = 32
     if os.path.isfile(os.path.join(prms_o['cp_path'], 'checkpoint')) is True:
         model.load_weights(prms_o['cp_path'] + '/cp-best.ckpt')
         print('Resuming training from Epoch ' + str(prms['ep']))
 
-    loss_fcn = ls.loss
-    metric_fcns = ls.metrics()
     model.compile(
-        optimizer=optimizers.Adam(prms_o['learning_rate']),loss=loss_fcn, metrics=metric_fcns)
+        optimizer=optimizers.Adam(prms_o['learning_rate']),loss=ls.loss, metrics=ls.metrics())
        
     callbacks = airpi_callbacks(prms_o, prms_net).as_list
-
-    from tensorflow.data.experimental import AUTOTUNE
 
     model.fit(training_ds,
               validation_data=validation_ds,
@@ -77,23 +76,19 @@ if __name__ == '__main__':
 
 
     from tensorflow import config as tf_config
-    tf_config.optimizer.set_jit("autoclustering")
+    # tf_config.optimizer.set_jit("autoclustering")
 
-    from ap_utils.util_fcns import debugger_is_active, manage_args
+    from ap_utils.file_ops import manage_args
+    from ap_utils.globals import debugger_is_active
     prms, prms_net = manage_args(args) 
-
-    from tensorflow.keras import optimizers
     
-   
-    from ap_training.data_fcns import getDatasets
     from ap_training.callbacks import airpi_callbacks
     if prms_net['arch'] == 'UNET':
         from ap_architectures.models import UNET as NET
     elif prms_net['arch'] == 'COMPLEX':
         from ap_architectures.models import CNET as NET
-    import ap_training.losses as ls
     
     tf_config.run_functions_eagerly(debugger_is_active())
-    
+
     fcn_train(prms, prms_net, NET)
 

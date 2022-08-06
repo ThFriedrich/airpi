@@ -9,7 +9,7 @@ from tqdm import tqdm
 import nvidia_smi
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
-from ap_reconstruction.colormaps import parula
+from ap_utils.colormaps import parula
 
 def get_gpu_memory():
 
@@ -20,13 +20,7 @@ def get_gpu_memory():
 
     return info
 
-# gpus = tf.config.list_physical_devices('GPU')
-# gpu_mem = get_gpu_memory().free/1024**2
-# tf.config.experimental.set_virtual_device_configuration(
-#         gpus[0],
-#         [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=gpu_mem-512)])
-
-from ap_architectures.utils import fft2d, ifft2d, interp2dcomplex, tf_com, tf_ifft2d, rAng_2_mrad, tf_normalise_to_one, tf_normalise_to_one_complex, tf_pi, tf_fft2d, tf_FourierShift2D
+from ap_utils.functions import fft2d, ifft2d, interp2dcomplex, tf_normalise_to_one_complex
 
 def load_model(prms_net, X_SHAPE, scale):
     '''
@@ -34,7 +28,7 @@ def load_model(prms_net, X_SHAPE, scale):
     '''
 
     if 'CNET' in prms_net['cp_path'].upper():
-        from ap_architectures.complex_net import CNET as ARCH
+        from ap_architectures.models import CNET as ARCH
     else:
         from ap_architectures.models import UNET as ARCH
 

@@ -1,6 +1,5 @@
 # Note: You can use any Debian/Ubuntu based image you want. 
-FROM tensorflow/tensorflow:2.7.0-gpu
-# FROM nvcr.io/nvidia/tensorflow:21.03-tf2-py3
+FROM tensorflow/tensorflow:2.9.0-gpu
 
 # [Option] Install zsh
 ARG INSTALL_ZSH="true"
@@ -17,13 +16,6 @@ ARG USERNAME=airpi
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
 COPY library-scripts/*.sh /tmp/library-scripts/
-
-# Fix nvidia key issue 
-RUN rm /etc/apt/sources.list.d/cuda.list
-RUN rm /etc/apt/sources.list.d/nvidia-ml.list
-RUN apt-key del 7fa2af80
-RUN apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/3bf863cc.pub
-RUN apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu1804/x86_64/7fa2af80.pub
 
 RUN apt-get update \
     && /bin/bash /tmp/library-scripts/common-debian.sh "${INSTALL_ZSH}" "${USERNAME}" "${USER_UID}" "${USER_GID}" "${UPGRADE_PACKAGES}" "true" "true" \
@@ -62,8 +54,8 @@ RUN pip install --upgrade tensorflow-addons
 RUN pip install silence_tensorflow
 RUN pip install nvidia-ml-py3
 RUN pip install tqdm
+RUN pip install autopep8
 RUN pip install cvnn[full]
-# RUN pip install opencv-python
 
 # Preserve command history
 RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \

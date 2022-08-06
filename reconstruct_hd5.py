@@ -66,7 +66,7 @@ if __name__ == "__main__":
         retrieve_phase_from_generator,
     )
     from ap_reconstruction.airpi_dataset import airpi_dataset
-    from ap_utils.util_fcns import load_hparams, debugger_is_active
+    from ap_utils.file_ops import load_hparams, debugger_is_active
     prms_net = get_model_ckp(cp_path)
 
     # from tensorflow import config as tf_config

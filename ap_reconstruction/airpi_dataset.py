@@ -8,7 +8,7 @@ import warnings
 
 from tqdm import tqdm
 from ap_reconstruction.tf_generator import tf_generator_ds, np_sequential_generator
-from ap_architectures.utils import fft2d, tf_cast_complex, tf_fft2d_A_p, tf_normalise_to_one, tf_normalise_to_one_amp, tf_probe_function, tf_mrad_2_rAng, tf_com, tf_FourierShift2D
+from ap_utils.functions import tf_cast_complex, tf_fft2d_A_p, tf_normalise_to_one_amp, tf_probe_function, tf_mrad_2_rAng
 import tensorflow as tf
 class airpi_dataset:
     def __init__(self, rec_prms, file, key='/ds', dose=None, in_memory=False, step=1):

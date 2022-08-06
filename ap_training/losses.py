@@ -1,11 +1,11 @@
 import tensorflow as tf
-from ap_architectures.utils import true_dict, pred_dict, tf_butterworth_filter2D
-from ap_utils.util_fcns import PRM
+from ap_utils.functions import true_dict, pred_dict, tf_butterworth_filter2D
+from ap_utils.globals import PRM
 import matplotlib.pyplot as plt
 
 btw_flt = tf_butterworth_filter2D((64,64),0.9,12)
 
-@tf.function
+@tf.function(jit_compile=True)
 def loss(y_true, y_pred):
     ytr, ypr, ytk, ypk = xy2dict(
         y_true, y_pred, space_out="b", plot_out=PRM.debug
@@ -13,7 +13,7 @@ def loss(y_true, y_pred):
     w = tf.reduce_sum(tf.cast(ytk["msk"],tf.uint16),axis=[1,2], keepdims=True)/4096
     l_ak = ik(ytk, ypk, (1-w)) + ask(ytk, ypk, w)
     l_ar = ir(ytr, ypr, (w)) + asr(ytr, ypr)
-    l_pk = pk(ytk, ypk, (1-w))/3.0
+    l_pk = pk(ytk, ypk, (1-w))
     l_pr = pr(ytr, ypr, (w))
     l_ob = obj(ytr, ypr)
     l_xc_p = (1 - xc_p(ytk, ypk))/2.0
@@ -48,28 +48,28 @@ def metrics():
        
     return metrics
 
-@tf.function
+@tf.function(jit_compile=True)
 def MSE(y_true, y_pred, w=None):
     ls = (y_true - y_pred) ** 2
     if w != None:
         ls *= w
     return ls
 
-@tf.function
+@tf.function(jit_compile=True)
 def MAE(y_true, y_pred, w=None):
     ls = tf.math.abs(y_true - y_pred)
     if w != None:
         ls *= w
     return ls
 
-@tf.function
+@tf.function(jit_compile=True)
 def RMSE(y_true, y_pred, w=None):
     ls = tf.math.sqrt((y_true - y_pred) ** 2)
     if w != None:
         ls *= w
     return ls
 
-@tf.function
+@tf.function(jit_compile=True)
 def rE(y_true, y_pred, msk=None, w=None):
     ls = tf.math.divide_no_nan(tf.math.abs(y_true - y_pred),(0.5*tf.math.abs(y_true)))
     ls = tf.math.minimum(ls, 1.0)
@@ -77,7 +77,7 @@ def rE(y_true, y_pred, msk=None, w=None):
         ls *= w
     return ls
 
-@tf.function
+@tf.function(jit_compile=True)
 def sMAPE(y_true, y_pred,  w=None):
     d =  (y_true - y_pred)
     if w != None:
@@ -86,7 +86,7 @@ def sMAPE(y_true, y_pred,  w=None):
     ls = tf.math.abs(tf.math.divide_no_nan(d, dn))
     return ls
 
-@tf.function
+@tf.function(jit_compile=True)
 def sMAPE2(y_true, y_pred,  w=None):
     d =  (y_true - y_pred)
     if w != None:
@@ -97,28 +97,28 @@ def sMAPE2(y_true, y_pred,  w=None):
     ls *= tf.math.exp(mae)
     return ls
 
-@tf.function
+@tf.function(jit_compile=True)
 def cauchy(y_true, y_pred, w=None):
     ls = tf.math.log(1+tf.math.divide_no_nan((y_pred-y_true)**2,y_true**2))
     if w != None:
         ls *= w
     return ls
 
-@tf.function
+@tf.function(jit_compile=True)
 def ask(y_true, y_pred, w=None):
     ls = MAE(y_true['amp_sc'], y_pred['amp_sc'])
     if w != None:
         ls *= w
     return tf.math.reduce_mean(ls)
 
-@tf.function
+@tf.function(jit_compile=True)
 def asr(y_true, y_pred, w=None):
     ls = MAE(y_true['amp_sc'], y_pred['amp_sc'], btw_flt)
     if w != None:
         ls *= w
     return tf.math.reduce_mean(ls)
 
-@tf.function
+@tf.function(jit_compile=True)
 def ik(y_true, y_pred, w=None):
     ls = MAE(y_true['int'], y_pred['int'])
     ls = tf.math.reduce_sum(ls, axis=[1,2],keepdims=True)
@@ -126,7 +126,7 @@ def ik(y_true, y_pred, w=None):
         ls *= w
     return tf.math.reduce_mean(ls)
 
-@tf.function
+@tf.function(jit_compile=True)
 def ir(y_true, y_pred, w=None):
     ls = MAE(y_true['int'], y_pred['int'])
     ls = tf.math.reduce_sum(ls, axis=[1,2],keepdims=True)
@@ -134,27 +134,27 @@ def ir(y_true, y_pred, w=None):
         ls *= w
     return tf.math.reduce_mean(ls)
 
-@tf.function
+@tf.function(jit_compile=True)
 def pk(y_true, y_pred, w=None):
     ls = (MSE(y_true['sin'], y_pred['sin']) + \
           MSE(y_true['cos'], y_pred['cos']))
-    ls += sMAPE2(y_true['phase'], y_pred['phase'])
+    # ls += sMAPE2(y_true['phase'], y_pred['phase'])
     if w != None:
         ls *= w
     return tf.math.reduce_mean(ls)
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def pr(y_true, y_pred, w=None):
     ls = (MSE(y_true['sin'], y_pred['sin'], y_true['weight']) + \
           MSE(y_true['cos'], y_pred['cos'], y_true['weight']))
-    ls += sMAPE2(y_true['phase'], y_pred['phase'], y_true['weight'])
+    # ls += sMAPE2(y_true['phase'], y_pred['phase'], y_true['weight'])
     if w != None:
         ls *= w
     return tf.math.reduce_mean(ls)
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def ar(y_true, y_pred, w=None):
     ls = MAE(y_true['amp'], y_pred['amp'])
     if w != None:
@@ -162,7 +162,7 @@ def ar(y_true, y_pred, w=None):
     return tf.math.reduce_mean(ls)
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def obj(y_true, y_pred, w=None):
     ls = sMAPE(y_true["obj"], y_pred["obj"], w=y_true['weight'])
     if w != None:
@@ -170,7 +170,7 @@ def obj(y_true, y_pred, w=None):
     return tf.math.reduce_mean(ls)
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def fcn_pearson_xc(y_true, y_pred):
     """Pearson correlation coefficient"""
     t_mean = tf.math.reduce_mean(y_true, axis=[1, 2], keepdims=True)
@@ -185,28 +185,28 @@ def fcn_pearson_xc(y_true, y_pred):
     return tf.math.reduce_mean(corr)
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def xc_a(y_true, y_pred):
     return fcn_pearson_xc(y_true["amp_sc"], y_pred["amp_sc"])
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def xc_p(y_true, y_pred):
     return fcn_pearson_xc(y_true["phase"], y_pred["phase"])
 
 
-@tf.function
+@tf.function(jit_compile=False)
 def xc_obj(y_true, y_pred):
     return fcn_pearson_xc(y_true["obj"], y_pred["obj"])
 
-@tf.function
+@tf.function(jit_compile=True)
 def fcn_weight(y_true):
     amp = y_true["amp"]
     w = amp - tf.math.reduce_min(amp, axis=[-1, -2], keepdims=True)
     w = w / tf.math.reduce_max(w, axis=[-1, -2], keepdims=True)
     return w
 
-@tf.function
+@tf.function(jit_compile=True)
 def xy2dict(
     y_true, y_pred, space_out="b", plot_out=False):
 
