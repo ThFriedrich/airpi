@@ -1,89 +1,58 @@
 
 import tensorflow as tf
-from ap_architectures.utils import tf_pi, tf_sin_cos2rad, floatx
+from ap_architectures.utils import tf_pi
 from tensorflow import keras as tfk
 from tensorflow_addons.layers import InstanceNormalization, GroupNormalization
 
 kl = tfk.layers
 
 
-class amplitude_output(tfk.layers.Layer):
+class Amplitude_Output(tfk.layers.Layer):
     """Layer that creates an activity sparsity regularization loss."""
 
     def __init__(self, b_skip=True):
-        super(amplitude_output, self).__init__()
-        self.scale =  tf.Variable(initial_value=0.015625, dtype=tf.float32, trainable=False)
+        super(Amplitude_Output, self).__init__()
+        self.scale =  tf.Variable(initial_value=0.0196, dtype=tf.float32, trainable=False)
         self.b_skip = b_skip
         self.conv = kl.Conv2D(1, kernel_size=[3, 3], padding='same',
                               strides=[1, 1], kernel_regularizer=None, activity_regularizer=None,
                               activation='linear', dtype=tf.float32)
 
-    def df_bf_ratio_loss(self, x0, x_i):
-        b_msk = tf.cast(x0[..., 9], tf.bool)
-        bf_t = tf.math.reduce_mean(tf.where(b_msk, x0[..., 4], 0), axis=[1, 2])
-        df_t = tf.math.reduce_mean(
-            tf.where(~b_msk, x0[..., 4], 0), axis=[1, 2])
-        ratio_t = tf.math.maximum(tf.math.divide_no_nan(df_t, bf_t), 1e-7)
-        bf_p = tf.math.reduce_mean(
-            tf.where(b_msk, tf.squeeze(x_i), 0), axis=[1, 2])
-        df_p = tf.math.reduce_mean(
-            tf.where(~b_msk, tf.squeeze(x_i), 0), axis=[1, 2])
-        ratio_p = tf.math.maximum(tf.math.divide_no_nan(df_p, bf_p), 1e-7)
-        ls = tf.math.reduce_mean(tf.math.abs(ratio_p - ratio_t))/10
-
-        self.add_loss(ls)
-        self.add_metric(ls, name='df_ratio_k2')
-
     def call(self, x0, x, training=False):
 
         x = self.conv(x)
-        if self.b_skip:
-            dose = tf.reduce_sum(x0[..., 4])
-            x_add = (x0[..., 4, tf.newaxis]/dose)**0.05
-            x = kl.add([x, x_add])
-
         if training:
             x = x * self.scale
         else:
             x = tf.maximum(0.0, x) * self.scale
+        if self.b_skip:
+            # dose = tf.reduce_sum(x0[..., 4], axis=[1, 2])
+            # x_add = (x0[..., 4, tf.newaxis]/dose)**0.05
+            x_add = x0[...,9, tf.newaxis]
+            x = kl.add([x, x_add])
         
-        ls =  tf.math.reduce_mean(tf.maximum(tf.math.reduce_sum(x**10, axis=[1, 2])-1,0))
+        if training:
+            ls =  tf.math.reduce_mean(tf.maximum(tf.math.reduce_sum(x**10, axis=[1, 2])-1,0))
+            self.add_loss(ls)
+            self.add_metric(ls, name='int_constraint')
         
-        self.add_loss(ls)
-        self.add_metric(ls, name='int_constraint')
-        self.add_metric(self.scale, name='amp_scale')
-
-        # self.df_bf_ratio_loss(x0, x)
-
+        
         return x
+        
 
-
-class phase_output(tfk.layers.Layer):
+class Phase_Output(tfk.layers.Layer):
     """Layer that creates an activity sparsity regularization loss."""
 
-    def __init__(self, n=1):
-        super(phase_output, self).__init__()
-        self.scale =  tf.Variable(initial_value=0.2, dtype=tf.float32, trainable=False, constraint=lambda x: tf.clip_by_value(x, 1e-3, 1))
-        self.n = n
-        self.conv = kl.Conv2D(self.n, kernel_size=[3, 3], padding='same',
+    def __init__(self, b_skip=True):
+        super(Phase_Output, self).__init__()
+        self.scale =  tf.Variable(initial_value=0.2, dtype=tf.float32, trainable=False)
+        self.b_skip = b_skip
+        self.conv = kl.Conv2D(1, kernel_size=[3, 3], padding='same',
                               strides=[1, 1], kernel_regularizer=None, activity_regularizer=None,
                               activation='linear', dtype=tf.float32)
 
-    def decompose(self, x):
-        if self.n > 1:
-            x_sin, x_cos = tf.split(x)
-            x_sin = tf.math.sin(x_sin)
-            x_cos = tf.math.cos(x_cos)
-            ls = tf.norm(tf.stack([x_sin, x_cos]),
-                         ord="euclidean", axis=0) - 1.0
-            self.add_loss(ls)
-            self.add_metric(ls, name='sin_cos_ecn')
-        else:
-            x_sin = tf.sin(x * self.scale)
-            x_cos = tf.cos(x * self.scale)
-        return x_sin, x_cos
 
-    def add_constraint(self, x_p):
+    def add_constraint(self, x_p, x0):
         xu = tf.where(x_p > tf_pi, x_p , 0)
         xl = tf.where(x_p < -tf_pi, x_p , 0)
         ls = tf.math.reduce_sum(tf.math.abs(xu)) + tf.math.reduce_sum(tf.math.abs(xl))
@@ -91,12 +60,21 @@ class phase_output(tfk.layers.Layer):
         self.add_metric(ls, name='phase_constraint')
         self.add_metric(self.scale, name='phase_scale')
 
-    def call(self, x):
+        msk = tf.where(x0[..., 9] > 0.0, True, False)
+        n_bf = tf.math.reduce_sum(tf.cast(msk, tf.float32),axis=[1, 2],keepdims=True)
+        bf_p = tf.where(msk, x0[...,10], 0)
+        bf_pp = tf.where(msk, tf.squeeze(x_p), 0)
+        ls2 = tf.reduce_mean(tf.math.abs(bf_p - bf_pp)/n_bf)*10
+        self.add_loss(ls2)
+        self.add_metric(ls2, name='phase_penalty')
+
+    def call(self, x0, x, training=False):
         x = self.conv(x) * self.scale
-        self.add_constraint(x)
-        # x = tf.math.tanh(x)*tf_pi
-        # x *= tf_pi
-        # x_sin, x_cos = self.decompose(x)
+        if self.b_skip:
+            x_add = x0[...,10, tf.newaxis]
+            x = kl.add([x, x_add])
+        if training:
+            self.add_constraint(x, x0)
 
         return x
 
@@ -108,9 +86,9 @@ class Deploy_Output(tfk.layers.Layer):
 
     def cast(self, x):
         x_a = tf.cast(x[...,0]**5, tf.complex64)
-        bl = tf.reduce_mean(x[:,31:33,31:33,1])-tf.expand_dims(tf.reduce_mean(x[:,31:33,31:33,1],axis=[1,2]),-1)[...,tf.newaxis]
+        # bl = tf.reduce_mean(x[:,31:33,31:33,1])-tf.expand_dims(tf.reduce_mean(x[:,31:33,31:33,1],axis=[1,2]),-1)[...,tf.newaxis]
         # bl = tf.reduce_mean(x[:,32,32,1],keepdims=True)-tf.expand_dims(x[:,32,32,1],-1)[...,tf.newaxis]
-        x_p = tf.cast(x[...,1]-bl, tf.complex64)
+        x_p = tf.cast(x[...,1], tf.complex64)
         x_o = tf.squeeze((x_a * tf.exp(1j*x_p)))
         return x_o
     
@@ -356,7 +334,7 @@ class Expansion_Block(tfk.layers.Layer):
         self.expansion = Convolution_Block(filters=nf,  kernel_size=self.kernel_size, strides=self.strides, padding=self.padding,
                                              kernel_regularizer=self.kernel_regularizer, activity_regularizer=self.activity_regularizer, initializer=self.initializer,
                                              activation=self.activation,normalization=self.normalization,transpose=True)
-        self.conv_stack = Conv_Stack(n_blocks=self.n_blocks, kernel_size=self.kernel_size, strides=[1,1], padding=self.padding,
+        self.conv_stack = Conv_Stack(filters=nf, n_blocks=self.n_blocks, kernel_size=self.kernel_size, strides=[1,1], padding=self.padding,
                                      kernel_regularizer=self.kernel_regularizer, activity_regularizer=self.activity_regularizer, initializer=self.initializer,
                                      activation=self.activation,normalization=self.normalization)
         self.concatenation = tfk.layers.Concatenate()

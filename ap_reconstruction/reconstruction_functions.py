@@ -59,7 +59,7 @@ class ReconstructionWorker():
         self.b_offset_correction = options['b_offset_correction']
 
         if self.ds_ews is not None:
-            self.hf_write = h5py.File(ds_ews, 'w')
+            self.hf_write = h5py.File(self.ds_ews, 'w')
             self.ds_write =     self.hf_write.create_dataset('ds', 
                                 shape=(1, 1, int(cbed_size), int(cbed_size)), 
                                 chunks = (1,1,int(cbed_size),int(cbed_size)), 
@@ -91,7 +91,7 @@ class ReconstructionWorker():
 
         self.le_y = int(round(self.rec_prms['ny']*self.rec_prms["step_size"]/self.rec_prms["px_size"])+self.cbed_size_scaled-1)
         self.le_x = int(round(self.rec_prms['nx']*self.rec_prms["step_size"]/self.rec_prms["px_size"])+self.cbed_size_scaled-1)
-        self.object = np.zeros((self.le_x, self.le_y), dtype='complex64')
+        self.object = np.zeros((self.le_y, self.le_x), dtype='complex64')
         
         beam_k = self.rec_prms['beam_in_k'][...,0]*np.exp(1j*self.rec_prms['beam_in_k'][...,1])
         beam_k = interp2dcomplex(beam_k,out_size=[64,64])
@@ -104,7 +104,7 @@ class ReconstructionWorker():
         self.rec_prms['beam_in_k'] = tf.cast(beam_k,tf.complex64)
         
         beam_r_int = np.abs(beam_r)**2
-        self.idx_b = np.nonzero(beam_r_int>0.01*(np.max(beam_r_int))) # where the beam has significant intensity
+        self.idx_b = np.nonzero(beam_r_int>0.1*(np.max(beam_r_int))) # where the beam has significant intensity
 
         self.t[self.idx_b] = 1
         self.idx_bb = self.translate_idx()
@@ -138,7 +138,7 @@ class ReconstructionWorker():
         return x_int, x_frac, y_int, y_frac
 
     def translate_idx(self):
-        tt = np.zeros((self.le_x, self.le_y))
+        tt = np.zeros((self.le_y, self.le_x))
         tt[0:int(self.cbed_size_scaled),0:int(self.cbed_size_scaled)] = self.t
         return np.nonzero(tt==1)
 
@@ -226,7 +226,6 @@ class ReconstructionWorker():
 
         fig , axes = plt.subplots(3, 2,figsize=(4, 4),squeeze=True)
 
-        # pred = (pred[...,0]**5)*np.exp(1j*pred[...,1])
         im = list()
 
         im.append(axes[0,0].imshow(np.abs(pred)**0.2))
@@ -247,7 +246,6 @@ class ReconstructionWorker():
 def update_obj_fig(writer, obj_fig, fig, xy):
     le_half = int(writer.cbed_size_scaled//2)
     st_px = writer.rec_prms['step_size']/writer.rec_prms['px_size']
-    # data = np.angle(writer.object)
     data = np.angle(writer.object[le_half:-le_half,le_half:-le_half])
     ylim = int(st_px*np.max(xy[:,0]))
     data[ylim:,:] = np.core.nan
@@ -275,7 +273,8 @@ def plot_set_init(writer):
     return set_fig, set_ax_obj
 
 def plot_set_update(set_ax_obj, set_fig, set, pred, pos, writer):
-        order = [6, 3, 0, 7, 4, 1, 8, 5, 2]
+        order = [8, 5, 2, 7, 4, 1, 6, 3, 0]
+        # order = np.flip(order)
         le_half = int(writer.cbed_size_scaled//2)
         st_px = writer.rec_prms['step_size']/writer.rec_prms['px_size']
         for ib, set_b in enumerate(set['cbeds']):

@@ -422,57 +422,13 @@ def pred_dict(y_tensor, btw_filt=None):
     k["int"] = tf.math.pow(k["amp"],2)
     k["sin"], k["cos"] = tf_sin_cos_decomposition(k["phase"])
 
-    r["amp"], r["phase"] = tf_switch_space(k['wv'], space="r")
+    r["amp"], r["phase"] = tf_switch_space(k['wv'], space="k")
     r["wv"] = tf_cast_complex(r["amp"], r["phase"])
     r["amp_sc"] = tf.math.pow(r["amp"],0.2)
     r["sin"], r["cos"] = tf_sin_cos_decomposition(r["phase"])
     r["int"] = tf.math.abs(tf.math.pow(r["wv"],2))
 
     return r, k
-
-# @tf.function
-# def pred_dict(y_tensor, btw_filt=None):
-#     """
-#     create a dictionary of predicted results for use in differnt metrics and loss functions, using tensorflow.
-#     Input:
-#         y_tensor: tensor of predicted results (NN output)
-#     Output:
-#         r: dictionary of predicted results in real space
-#         k: dictionary of predicted results in k-space
-#         Each dictionary contains:
-#             amp: amplitude
-#             phase: phase
-#             r: real part
-#             i: imaginary part
-#             sin: sinusoidal part of phase
-#             cos: cosine part of phase
-#     """
-#     r = dict()
-#     k = dict()
-#     y_tensor = tf.where(tf.math.is_nan(y_tensor), tf.zeros_like(y_tensor), y_tensor)
-
-#     k["amp_sc"], k["sin"], k["cos"] = tf.unstack(y_tensor, axis=-1)
-#     k["amp"] = tf.math.pow(k["amp_sc"],5)
-#     # if btw_filt is not None:
-#     #     k["amp"] *= btw_filt
-#     k["phase"] = tf_sin_cos2rad(k["sin"], k["cos"])
-#     kw = tf_cast_complex(k["amp"], k["phase"])
-#     k["int"] = tf.math.pow(tf.math.abs(kw),2)
-#     # k["r"] = tf.math.real(kw)
-#     # k["i"] = tf.math.imag(kw)
-
-#     r["amp"], r["phase"] = tf_switch_space(kw, space="k")
-#     r["sin"], r["cos"] = tf_sin_cos_decomposition(r["phase"])
-#     r["wv"] = tf_cast_complex(r["amp"], r["phase"])
-#     r["int"] = tf.math.abs(tf.math.pow(r["wv"],2))
-#     # r["r"] = tf.math.real(r["wv"])
-#     # r["i"] = tf.math.imag(r["wv"])
-    
-#     r["amp"] = tf.where(tf.math.is_nan(r["amp"]), tf.zeros_like(r["amp"]), r["amp"])
-#     r["int"] = tf.where(tf.math.is_nan(r["int"]), tf.zeros_like(r["int"]), r["int"])
-#     r["amp_sc"] = tf.math.pow(r["amp"],0.2)
-
-#     return r, k
 
 
 @tf.function
@@ -494,7 +450,6 @@ def true_dict(y_tensor):
     """
     r = dict()
     k = dict()
-
     k["amp"], k["phase"], r["amp"], r["phase"], probe, probe_phase, msk_r, msk_k = tf.unstack(y_tensor, axis=-1)
     k["amp_sc"] = k["amp"] ** 0.2
     kw = tf_cast_complex(k["amp"], k["phase"])

@@ -15,7 +15,7 @@ from ap_utils.util_fcns import PRM, fcn_plot_example, save_hparams, fcn_plot_nn_
 
 
 class airpi_callbacks:
-    def __init__(self, prms_o, prms_net, tb_freq, im_freq, reset_metric_freq_batch):
+    def __init__(self, prms_o, prms_net):
         str_lr = '%.2E' % prms_o['learning_rate_0']
         log_sub_dir = path.join(
             prms_o['log_path'], 'bs_' + str(prms_o['batch_size']) + '_lr_' + str_lr)
@@ -24,26 +24,26 @@ class airpi_callbacks:
             logdir=path.join(log_sub_dir, 'images'))
         writer.set_as_default()
 
-        callback_cp = self.Checkpoint(
-            log_dir=prms_o['cp_path'] + '/cp-best.ckpt',
-            prms=prms_o,
-            prms_net=prms_net)
+        callback_cp = keras.callbacks.ModelCheckpoint(
+            filepath = prms_o['cp_path'] + '/cp-best.ckpt',
+            verbose = 1,
+            monitor = 'val_loss',
+            mode = 'min',
+            save_best_only = True,
+            save_weights_only = True)
         callback_im = self.TensorboardImage(
-            im_freq=im_freq,
+            im_freq=1,
             test_ds=prms_o['test_path'],
             sample_dir=prms_o['sample_dir'],
-            reset_metric_freq=reset_metric_freq_batch)
+            prms=prms_o,
+            prms_net=prms_net)
         callback_tb = keras.callbacks.TensorBoard(
             log_dir=log_sub_dir,
             write_graph=True,
             profile_batch=1,
             histogram_freq=1,
             update_freq='epoch')
-        # callback_lr = self.LearningRateScheduler(
-        #     log_dir=log_sub_dir,
-        #     prms=prms_o,
-        #     prms_net=prms_net)
-        callback_lr = self.LearningRateScheduler2(
+        callback_lr = self.LearningRateScheduler(
             prms_net=prms_net,
             prms=prms_o,)
         callback_csv = keras.callbacks.CSVLogger(
@@ -55,16 +55,18 @@ class airpi_callbacks:
                         callback_tb, callback_lr, callback_csv]
 
     class TensorboardImage(keras.callbacks.Callback):
-        def __init__(self, reset_metric_freq, im_freq, test_ds, sample_dir):
-            self.reset_metric_freq = reset_metric_freq
+        def __init__(self, im_freq, test_ds, sample_dir, prms, prms_net):
             self.im_freq = im_freq
             self.n_dat = 16
             self.ds = getTestDataset(test_ds, self.n_dat)
             self.sample_dir = sample_dir
+            self.prms = prms
+            self.prms_net = prms_net
+            self.hp_path = path.join(
+                self.prms['cp_path'], 'hyperparameters.pickle')
             self.rec_prms = [{
                 "name":"Graphene",
                 "path": self.sample_dir+"graphene/gra.hdf5",
-                # "path": "/home/thomas/SSD/Samples/graphene/gra.hdf5",
                 "key":"ds",
                 "dose":None,
                 "E0": 200.0,
@@ -166,83 +168,24 @@ class airpi_callbacks:
                               step=epoch, max_outputs=256)
 
         def on_epoch_end(self, epoch, logs=None):
-            '''Scheduleing'''
+            self.prms['learning_rate'] = float(
+                keras.backend.get_value(self.model.optimizer.lr))
+            save_hparams([self.prms, self.prms_net], self.hp_path)
             if epoch % self.im_freq == 0:
                 pred = self.model.predict(self.ds, steps=1)
                 self.fcn_xy_image_gen(pred, epoch)
                 self.run_example_ds(epoch)
 
-    class Checkpoint(keras.callbacks.ModelCheckpoint):
-        def __init__(self, log_dir, prms, prms_net):
-            super(airpi_callbacks.Checkpoint, self).__init__(log_dir)
-
-            self.prms = prms
-            self.prms_net = prms_net
-            self.filepath = log_dir
-            self.verbose = 1
-            self.monitor = 'val_loss'
-            self.mode = 'min'
-            self.save_best_only = True
-            self.save_weights_only = True
-            self.hp_path = path.join(
-                self.prms['cp_path'], 'hyperparameters.pickle')
-
-        def on_epoch_end(self, epoch, logs=None):
-            self.prms['learning_rate'] = float(
-                keras.backend.get_value(self.model.optimizer.lr))
-            save_hparams([self.prms, self.prms_net], self.hp_path)
-            return super().on_epoch_end(epoch, logs=logs)
-
         def on_epoch_begin(self, epoch, logs=None):
             self.prms['ep'] = epoch
             return super().on_epoch_begin(epoch, logs=logs)
-
-    class LearningRateScheduler(keras.callbacks.Callback):
-        """Custom learning rate schedule callback """
-
-        def __init__(self, log_dir, prms, prms_net):
-            super(airpi_callbacks.LearningRateScheduler, self).__init__()
-            self.prms = prms
-            self.prms_net = prms_net
-            self.schedule = lr_schedule(prms).schedule
-
-        def on_epoch_begin(self, epoch, logs=None):
-            if not hasattr(self.model.optimizer, 'lr'):
-                raise ValueError('Optimizer must have a "lr" attribute.')
-            # Get the current learning rate from model's optimizer.
-            lr = float(keras.backend.get_value(self.model.optimizer.lr))
-            scheduled_lr = self.schedule[epoch]
-
-            # For grid search a range a lr values is used.
-            if 'learning_rate_rng' in self.prms:
-                self.model.load_weights(path.join(
-                    path.curdir, self.prms['cp_path'], 'initial_weights.h5'))
-
-            if abs(scheduled_lr-lr) > 1e-8:
-                # Set the value back to the optimizer before this epoch starts
-                keras.backend.set_value(self.model.optimizer.lr, scheduled_lr)
-                print('\nEpoch %05d: Learning rate changed to %6.5e.' %
-                      (epoch + 1, scheduled_lr))
-
-            # Tensorboard metrics
-            summary.scalar('Learning Rate',
-                           data=self.model.optimizer.lr, step=epoch)
-            summary.scalar(
-                'Batch Size', data=self.prms['batch_size'], step=epoch)
-            summary.scalar('Dose_l', data=PRM.dose[0], step=epoch)
-            summary.scalar('Dose_u', data=PRM.dose[-1], step=epoch)
-            if self.prms_net['w_regul'] != None:
-                summary.scalar('Weight Regularisation',
-                               data=self.prms_net['w_regul'], step=epoch)
-            if self.prms_net['a_regul'] != None:
-                summary.scalar('Activity Regularisation',
-                               data=self.prms_net['a_regul'], step=epoch)
-            return super().on_epoch_begin(epoch, logs=logs)
-    class LearningRateScheduler2(keras.callbacks.ReduceLROnPlateau):
+    
+    
+    class LearningRateScheduler(keras.callbacks.ReduceLROnPlateau):
         """Custom learning rate schedule callback """
 
         def __init__(self, prms, prms_net):
-            super(airpi_callbacks.LearningRateScheduler2, self).__init__(
+            super(airpi_callbacks.LearningRateScheduler, self).__init__(
                 monitor='val_loss',
             factor=0.5,
             patience=3,

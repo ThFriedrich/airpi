@@ -107,7 +107,7 @@ def get_default_prms(hp_path, log_path):
         "loss_prms_k":[2.0, 4.0, 2.0, 4.0, 1.0, 1.0e-3, 1.0],
         "batch_size": 32,
         "scale_cbeds": True,
-        "dose": [5, 10, 5]
+        "dose": [1, 7, 5]
     }
 
     prms_net = {
@@ -242,6 +242,8 @@ def load_hyperparameters(cp_path, log_path='.'):
         )
         if cnt == "c":
             prms, prms_net = load_hparams(hp_file)
+            prms['log_path'] = log_path
+            prms['cp_path'] = cp_path
         elif cnt == "d":
             from shutil import rmtree
             rmtree(cp_path, ignore_errors=True)

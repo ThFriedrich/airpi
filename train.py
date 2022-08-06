@@ -6,38 +6,31 @@ import silence_tensorflow.auto
 def fcn_train(prms_o, prms_net, NET):
     '''Train the Network'''
 
-    training_ds, validation_ds = getDatasets(prms_o)
+    training_ds, validation_ds, validation_steps, steps_per_epoch = getDatasets(prms_o)
 
     model = NET(prms_net, training_ds._flat_shapes[0][1:4]).build()
     model.summary()
 
-    tb_freq = 4
+    tb_freq = 32
     if os.path.isfile(os.path.join(prms_o['cp_path'], 'checkpoint')) is True:
         model.load_weights(prms_o['cp_path'] + '/cp-best.ckpt')
         print('Resuming training from Epoch ' + str(prms['ep']))
 
-    # loss_fcn = ls.loss(prms_o)
-    # metric_fcn = ls.metric_fcns(prms_o, model)
     loss_fcn = ls.loss
     metric_fcns = ls.metrics()
     model.compile(
         optimizer=optimizers.Adam(prms_o['learning_rate']),loss=loss_fcn, metrics=metric_fcns)
-        # optimizer=optimizers.SGD(prms_o['learning_rate']), loss=loss_fcn, metrics=metric_fcns)
-        # optimizer=optimizers.Nadam(prms_o['learning_rate']),loss=loss_fcn, metrics=[metric_fcn])
-        # optimizer=optimizers.Adam(prms_o['learning_rate']),loss=loss_fcn)
-        # optimizer=optimizers.Adam(prms_o['learning_rate']),loss=loss_fcn, metrics=[metric_fcn])
        
-    
-    callbacks = airpi_callbacks(prms_o, prms_net, tb_freq, 1, tb_freq).as_list
+    callbacks = airpi_callbacks(prms_o, prms_net).as_list
 
     from tensorflow.data.experimental import AUTOTUNE
 
     model.fit(training_ds,
               validation_data=validation_ds,
-              validation_steps=prms_o['validation_steps'],
+              validation_steps=validation_steps,
               validation_freq=1,
               epochs=prms_o['epochs'],
-              steps_per_epoch=prms_o['steps_per_epoch'],
+              steps_per_epoch=steps_per_epoch,
               initial_epoch=prms_o['ep'],
               callbacks=callbacks,
               use_multiprocessing=True,
@@ -73,6 +66,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs_cycle_1', type=int, help='Epochs to train for cycle 1')
     parser.add_argument('--epochs_cycle', type=int, help='Epochs to train for all other cycles')
     parser.add_argument('--sample_dir', type=str, help='Directory containing sample datasets')
+    parser.add_argument('--dropout', type=float, help='Dropout rate')
     args = vars(parser.parse_args())
 
     if args["gpu_id"] is None:
@@ -83,30 +77,23 @@ if __name__ == '__main__':
 
 
     from tensorflow import config as tf_config
+    tf_config.optimizer.set_jit("autoclustering")
 
-    # physical_devices = tf_config.experimental.list_physical_devices('GPU')
-    # if len(physical_devices) > 0:
-    #     tf_config.experimental.set_memory_growth(physical_devices[0], True)
-   
     from ap_utils.util_fcns import debugger_is_active, manage_args
     prms, prms_net = manage_args(args) 
 
-    from tensorflow.keras import mixed_precision, optimizers
+    from tensorflow.keras import optimizers
     
-    # mixed_precision.set_global_policy('mixed_float16')
-    # mixed_precision.set_global_policy('float32')
-    tf_config.optimizer.set_jit("autoclustering")
    
-
     from ap_training.data_fcns import getDatasets
     from ap_training.callbacks import airpi_callbacks
     if prms_net['arch'] == 'UNET':
         from ap_architectures.models import UNET as NET
     elif prms_net['arch'] == 'COMPLEX':
-        from ap_architectures.complex_net import CNET as NET
+        from ap_architectures.models import CNET as NET
     import ap_training.losses as ls
     
     tf_config.run_functions_eagerly(debugger_is_active())
-
+    
     fcn_train(prms, prms_net, NET)
 

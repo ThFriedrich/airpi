@@ -9,7 +9,7 @@ from tensorflow import int32, float32, squeeze, math, image, transpose
 
 class tf_generator:
     '''Generator that keeps the HDF5-DB open and reads chunk-by-chunk'''
-    def __init__(self, data, dims, bfm, step, dose, step_size):
+    def __init__(self, data, dims, bfm, step, dose, step_size, order):
         self.file = data
         self.size_in =  dims
         self.dose = dose
@@ -17,16 +17,16 @@ class tf_generator:
         self.bfm = bfm
         self.step = step
         self.step_size = step_size
+        self.__set_row_getter__(order)
 
-        self.x_rest = -(self.file.shape[0] % self.step)
         if self.x_rest == 0:
             self.x_rest = None
-        self.rw = np.zeros((self.size_in[0]+2,) + (3,) + self.size_in[2:],dtype=self.d_type)
-        load_dat = self.file.astype(self.d_type)._dset[:self.x_rest:self.step,0,...]
+        self.rw = np.zeros((self.nx+2,) + (3,) + self.size_in[2:],dtype=self.d_type)
+        load_dat = self.__get_row__(0)
         if self.dose is not None:
             load_dat = squeeze(tf_poiss([1], load_dat*self.dose, seed=131087))
-        self.rw[1:self.size_in[0]+1,1,...] = load_dat
-        self.rw[1:self.size_in[0]+1,2,...] = load_dat
+        self.rw[1:self.nx+1,1,...] = load_dat
+        self.rw[1:self.nx+1,2,...] = load_dat
         
         self.q_row = Queue(maxsize=8)
         self.q_set = Queue(maxsize=256)
@@ -40,17 +40,17 @@ class tf_generator:
         self.co_thread.start()
         
     def RowWorker(self): 
-        for rw_i in range(1,self.size_in[1]):
+        for rw_i in range(1,self.ny):
             self.rw = np.roll(self.rw,-1,axis=1)
-            load_dat = self.file.astype(self.d_type)._dset[:self.x_rest:self.step,(rw_i)*self.step,...] 
+            load_dat = self.__get_row__(rw_i)
             if self.dose is not None:
                 load_dat = squeeze(tf_poiss([1], load_dat*self.dose, seed=131087))
-            self.rw[1:self.size_in[0]+1,2,...] = load_dat
+            self.rw[1:self.nx+1,2,...] = load_dat
             self.q_row.put((self.rw, rw_i))
 
         # Pad last row with empty cbeds
         self.rw = np.roll(self.rw,-1,axis=1)
-        self.rw[1:self.size_in[0]+1,2,...] = load_dat
+        self.rw[1:self.nx+1,2,...] = load_dat
         self.q_row.put((self.rw, rw_i+1))
         self.rows_finished.set()
 
@@ -60,13 +60,31 @@ class tf_generator:
             rw, ri = self.q_row.get()
             rw[0,...] = rw[1,...]
             rw[-1,...] = rw[-2,...]
-            for rx in range(1, self.size_in[0]+1):
+            for rx in range(1, self.nx+1):
                 self.q_set.put((self.cast_set(rw, rx) , rx, ri))
             if self.rows_finished.is_set(): 
                 if self.q_row.qsize()==0:
                     self.finished.set()
                     break
-            
+
+    def __get_row_yx__(self,y):
+                return self.file.astype(self.d_type)._dset[y*self.step,:self.x_rest:self.step,...]
+
+    def __get_row_xy__(self,y):
+                return self.file.astype(self.d_type)._dset[:self.x_rest:self.step, y*self.step,...]
+
+    def __set_row_getter__(self, order):
+        if order[0:2] == ['ry','rx']:
+            self.nx = self.size_in[1]
+            self.ny = self.size_in[0]
+            self.x_rest = -(self.file.shape[1] % self.step)
+            self.__get_row__ = self.__get_row_yx__    
+        elif order[0:2] == ['rx','ry']:
+            self.nx = self.size_in[0]
+            self.ny = self.size_in[1]
+            self.x_rest = -(self.file.shape[0] % self.step)
+            self.__get_row__ = self.__get_row_xy__ 
+
     def cast_set(self, rw, rx):
         set = np.cast[np.float32](rw[rx-1:rx+2,...])
         # self.__plot_set2d__(set)
@@ -150,15 +168,19 @@ class tf_generator:
             yield {'cbeds': set, 'pos': np.expand_dims([iy, ix],-1)}
                     
 class tf_generator_in_memory:
-    def __init__(self, data, size_in, bfm, step, dose, step_size):
+    def __init__(self, data, size_in, bfm, step, dose, step_size, order=['rx','ry','kx','ky']):
         self.bfm = bfm
         self.d_type = data.dtype 
         self.data = data.astype(self.d_type)._dset[...]
         self.data = np.pad(self.data,((1,1),(1,1),(0,0),(0,0)),mode='reflect')
         self.step = step
         self.dose = dose
-        self.rn_x = list(range(1,size_in[0]+1,self.step))
-        self.rn_y = list(range(1,size_in[1]+1,self.step))
+       
+        if order[0:2] == ['ry','rx']:
+            self.data = np.transpose(self.data,(1,0,2,3))
+
+        self.rn_x = list(range(1,self.nx+1,self.step))
+        self.rn_y = list(range(1,self.ny+1,self.step))
         self.step_size = step_size
 
     def cast_set(self, rw, rx):
@@ -197,7 +219,7 @@ class tf_generator_in_memory:
                 yield {'cbeds': set, 'pos': np.expand_dims([iy, ix],-1)}
 
 
-def tf_generator_ds(data, size_in, b_memory, bfm=None, step=1, dose=None, step_size=0.15):
+def tf_generator_ds(data, size_in, b_memory, bfm=None, step=1, dose=None, step_size=0.15, order=['rx','ry','kx','ky']):
     if bfm is not None:
         if bfm.ndim==2:
             bfm = np.expand_dims(bfm,-1)
@@ -206,36 +228,48 @@ def tf_generator_ds(data, size_in, b_memory, bfm=None, step=1, dose=None, step_s
         nc = 9
     if b_memory:
             return tf_ds.from_generator(
-            tf_generator_in_memory(data, size_in, bfm, step, dose, step_size),
+            tf_generator_in_memory(data, size_in, bfm, step, dose, step_size, order),
             output_types=(  {'cbeds':float32, 'pos': int32}),
             output_shapes=( {'cbeds': [size_in[2], size_in[3], nc], 'pos':[2,1]} ) 
             )
     else:
         return tf_ds.from_generator(
-            tf_generator(data, size_in, bfm, step, dose, step_size),
+            tf_generator(data, size_in, bfm, step, dose, step_size, order),
             output_types=(  {'cbeds':float32, 'pos': int32}),
             output_shapes=( {'cbeds': [64, 64, nc], 'pos':[2,1]} ) 
             )
 
 class np_sequential_generator():
     '''Generator that keeps the HDF5-DB open and reads chunk-by-chunk'''
-    def __init__(self, data, dims, step, scaling=None):
+    def __init__(self, data, dims, step, scaling=None, order=['rx','ry','kx','ky']):
         self.file = data
         self.size_in = dims
         self.step = step
         self.d_type = self.file.dtype 
         self.rw = self.file.astype(self.d_type)._dset[:,1,...]        
         self.scale_ds = scaling
-        if self.scale_ds is not None:
-            sc = self.scale_ds.astype(self.d_type)._dset[:,y,...]
-            rw = (np.cast[np.float](self.rw)*sc)/65536**10
+        self.__set_row_getter__(order)
+    
+    def __get_row_yx__(self,y):
+                return self.file.astype(self.d_type)._dset[y,...]
+
+    def __get_row_xy__(self,y):
+                return self.file.astype(self.d_type)._dset[:,y,...]
+
+    def __set_row_getter__(self, order):
+        if order[0:2] == ['ry','rx']:
+            self.nx = self.size_in[1]
+            self.ny = self.size_in[0]
+            self.__get_row__ = self.__get_row_yx__    
+        elif order[0:2] == ['rx','ry']:
+            self.nx = self.size_in[0]
+            self.ny = self.size_in[1]
+            self.__get_row__ = self.__get_row_xy__ 
+
     def __iter__(self):
-        for y in range(1,self.size_in[1],self.step):
-            rw = self.file.astype(self.d_type)._dset[:,y,...]
-            if self.scale_ds is not None:
-                sc = self.scale_ds.astype(self.d_type)._dset[:,y,...]
-                rw = (np.cast[np.float](rw)*sc)/65536**10
-            for x in range(1,self.size_in[0],self.step):
+        for y in range(1,self.ny,self.step):
+            rw = self.__get_row__(y)
+            for x in range(1,self.nx,self.step):
                 yield np.cast[np.float32](rw[x,...])
    
             

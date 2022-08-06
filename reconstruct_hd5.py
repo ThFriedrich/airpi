@@ -36,19 +36,20 @@ def get_model_ckp(cp_path):
 if __name__ == "__main__":
     os.system("clear")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dose", type=int, default=1e2, help="Dose")
-    parser.add_argument("--ds", type=int, default=1, help="Dataset")
-    parser.add_argument("--step", type=int, default=4, help="Step skip")
+    parser.add_argument("--dose", type=int, default=0, help="Dose")
+    parser.add_argument("--ds", type=int, default=0, help="Dataset")
+    parser.add_argument("--step", type=int, default=1, help="Step skip")
     parser.add_argument("--gpu_id", type=int, default=1, help="GPU")
-    # parser.add_argument("--model", type=str, default='CNET_16_D4_e', help="GPU")
-    # parser.add_argument("--model", type=str, default='CNET_32_D4_b', help="GPU")
+    parser.add_argument("--model", type=str, default='V_32_D4_e', help="GPU")
     # parser.add_argument("--model", type=str, default='CNET_32_D3_f', help="GPU")
     # parser.add_argument("--model", type=str, default='V_32_D3_RLA_d_e2_skip', help="GPU")
     # parser.add_argument("--model", type=str, default='V_32_D4_RELU_BN_skip_f', help="GPU")
     # parser.add_argument("--model", type=str, default='V_32_D3_RELU_GBN', help="GPU")
     # parser.add_argument("--model", type=str, default='V_16_D3_N_sMAPE3_BN_SW_ld_64_sc', help="GPU")
-    parser.add_argument("--model", type=str, default='V_16_D3_N_sMAPE3_BN_SW_lld_RELU', help="GPU")
-    # parser.add_argument("--model", type=str, default='V_16_D3_N_sMAPE2', help="GPU")
+    # parser.add_argument("--model", type=str, default='V_16_D4_BN_SW_2e4_P_SC_MAE_sMAPE2_sc', help="GPU")
+    # parser.add_argument("--model", type=str, default='V_16_D3_BN_SW_2e4_P_SC_rE_cap', help="GPU")
+    # parser.add_argument("--model", type=str, default='V_16_D3_BN_SW_2e4_P_SC_sMAPE2_pen', help="GPU")
+    # parser.add_argument("--model", type=str, default='V_16_D3_BN_SW_2e4_P_SC_MAE_PROBE_SKIP', help="GPU")
     parser.add_argument("--ap_fcn", type=str, default='avrg', help="Aperture function estimation, gene: parameter generated, avrg: use PACBED")
     args = vars(parser.parse_args())
     dose = int(args["dose"])
@@ -85,6 +86,54 @@ if __name__ == "__main__":
             "oversample": 2.0,
         }
         options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None}
+    
+    if ds == 12:
+        hd5_in = "/media/thomas/SSD/Samples/graphene/gra_tim.h5"
+        hd5_key = "ds"
+        rec_prms = {
+            "E0": 60.0,
+            "apeture": 34,
+            "gmax": 1.8632454,
+            "cbed_size": 64,
+            "step_size": 0.04,
+            "aberrations": [0, 0],
+            "bfm_type": args["ap_fcn"],
+            "oversample": 1.0,
+            "order": ['ry','rx','kx','ky']
+        }
+        options={'b_offset_correction':True, 'threads':6, 'ew_ds_path':None}
+
+    if ds == 13:
+        hd5_in = "/media/thomas/SSD/Samples/STO/sto_sro.h5"
+        hd5_key = "ds"
+        rec_prms = {
+            "E0": 300.0,
+            "apeture": 20,
+            "gmax": 1.6253973,
+            "cbed_size": 64,
+            "step_size": 0.43,
+            "aberrations": [-1, 1e-3],
+            "bfm_type": args["ap_fcn"],
+            "oversample": 2.0,
+            "order": ['ry','rx','kx','ky']
+        }
+        options={'b_offset_correction':False, 'threads':5, 'ew_ds_path':None}
+    
+    if ds == 14:
+        hd5_in = "/media/thomas/SSD/Samples/MgO/MgO_big.h5"
+        hd5_key = "ds_cbed"
+        rec_prms = {
+            "E0": 300.0,
+            "apeture": 20,
+            "gmax": 1.6253973,
+            "cbed_size": 64,
+            "step_size": 0.5,
+            "aberrations": [-1, 1e-3],
+            "bfm_type": args["ap_fcn"],
+            "oversample": 3.0,
+            "order": ['ry','rx','kx','ky']
+        }
+        options={'b_offset_correction':False, 'threads':5, 'ew_ds_path':None}
 
     # MoS2
     if ds == 1:
@@ -97,6 +146,7 @@ if __name__ == "__main__":
             "cbed_size": 128,
             "step_size": 0.05,
             "aberrations": [-1, 1e-3],
+            # "aberrations": [14.0312, 1e-3],
             "bfm_type": args["ap_fcn"],
             "oversample": 2.0,
         }
@@ -115,7 +165,7 @@ if __name__ == "__main__":
             "step_size": 0.1818,
             "aberrations": [-1, 1e-3],
             "bfm_type": args["ap_fcn"],
-            "oversample": 1.0,
+            "oversample": 2.0,
         }
         options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None}
 
@@ -137,8 +187,7 @@ if __name__ == "__main__":
 
     if ds == 4:
         # Au
-        # hd5_in = "/media/data/Samples/Au_big_crop2.h5"
-        hd5_in = "/media/thomas/SSD/Samples/Au/Au_big.h5"
+        hd5_in = "/media/thomas/SSD/Samples/Au/Au_big_crop2.h5"
         hd5_key = "ds"
         rec_prms = {
             "E0": 300.0,

@@ -56,16 +56,13 @@ ENV LC_ALL en_US.UTF-8
 RUN pip install --no-binary=h5py h5py
 RUN pip install matplotlib
 RUN pip install scikit-image
-# RUN pip install joblib
 RUN pip install pylint
 RUN pip install ipykernel
 RUN pip install --upgrade tensorflow-addons
 RUN pip install silence_tensorflow
-# RUN pip install pixstem
-# RUN pip install "dask[array]" --upgrade
 RUN pip install nvidia-ml-py3
-RUN pip install tf-complex
 RUN pip install tqdm
+RUN pip install cvnn[full]
 # RUN pip install opencv-python
 
 # Preserve command history

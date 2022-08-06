@@ -6,15 +6,13 @@ import h5py
 
 from ap_utils.util_fcns import PRM
 
-# @tf.function
+
 def cast_float32(x: tf.Tensor, meta: tf.Tensor, shape: tf.TensorShape) -> tf.Tensor:
     x = tf.cast(x, tf.float32)
     x = x * tf.broadcast_to(tf.expand_dims(meta, 0), shape) / 65536
 
     return x
 
-
-# @tf.function
 def cast_wave_float32(x: tf.Tensor, sc: tf.Tensor) -> tf.Tensor:
     # Amp & Phase
     sh_s = tf.TensorShape((64, 64))
@@ -181,7 +179,7 @@ def fcn_decode_val(x, lab_k, lab_r, prob_r, prms):
         [1], seed=(s1, s2), minval=0, maxval=len(PRM.dose), dtype=tf.int32
     )
     d = tf.gather(PRM.dose, rnd)
-    x = tf.squeeze(tf.random.poisson([1], x * d, seed=13))
+    x = tf.squeeze(tf.random.stateless_poisson([1]+x.shape.as_list(), lam=(x * d), seed=(s1, s2),dtype=tf.float32))
 
     if PRM.scale_cbeds:
         x = fcn_weight_cbeds(x, prms[3])
@@ -246,26 +244,26 @@ def datasetPipeline(filepaths, is_training, prms):
 
 def getDatasets(prms):
     if PRM.debug:
-        n_train_data = 128
+        n_train_data = prms["batch_size"] * 10
+        validation_steps = 8
     else:
         n_train_data = PRM.n_train
-
-    validation_steps = (
-        np.min([PRM.n_val, int(n_train_data * 0.05)]) // prms["batch_size"]
-    )
+        validation_steps = (
+            np.min([PRM.n_val, int(n_train_data * 0.05)]) // prms["batch_size"]
+        )
 
     steps_per_epoch = n_train_data // prms["batch_size"]
 
-    prms.update(
-        {"steps_per_epoch": steps_per_epoch, "validation_steps": validation_steps}
-    )
+    # prms.update(
+    #     {"steps_per_epoch": steps_per_epoch, "validation_steps": validation_steps}
+    # )
 
     PRM.scale_cbeds = prms["scale_cbeds"]
 
     training_ds = datasetPipeline(prms["train_path"], True, prms)
     validation_ds = datasetPipeline(prms["val_path"], False, prms)
 
-    return (training_ds, validation_ds)
+    return training_ds, validation_ds, validation_steps, steps_per_epoch
 
 
 def getTestDataset(filename, batch_size):

@@ -11,32 +11,24 @@ from ap_reconstruction.tf_generator import tf_generator_ds, np_sequential_genera
 from ap_architectures.utils import fft2d, tf_cast_complex, tf_fft2d_A_p, tf_normalise_to_one, tf_normalise_to_one_amp, tf_probe_function, tf_mrad_2_rAng, tf_com, tf_FourierShift2D
 import tensorflow as tf
 class airpi_dataset:
-    def __init__(self, rec_prms, file, key='fpd_expt/fpd_data/data', dose=None, in_memory=False, step=1):
+    def __init__(self, rec_prms, file, key='/ds', dose=None, in_memory=False, step=1):
         # Raw Dataset properties
         self.path = file
         self.key = key
         self.in_memory_overwrite = in_memory
         # Parameters relevant for Reconstruction
         self.rec_prms = rec_prms
-        self.get_sequence()
 
         # Dataset Augmentation
         self.dose = dose
         self.step = step
 
+        if 'order' not in self.rec_prms:
+            self.rec_prms['order'] = ['rx','ry','kx','ky']
+            
         # Initialization routines
         self.load_ds()
         self.get_bfm(rec_prms['bfm_type'])
-        
-    def get_sequence(self):
-        # Order needed = ['ky','kx','rx','ry']
-        if 'order' not in self.rec_prms:
-            self.rec_prms['order'] =  ['rx','ry','kx','ky']
-
-        if self.rec_prms['order'] == ['kx','ky','rx','ry']:
-            self.rec_prms['dim_seq'] = (1,0,2,3)
-        elif self.rec_prms['order'] == ['rx','ry','kx','ky']:
-            self.rec_prms['dim_seq'] = (3,2,0,1)
 
     def get_ds_type(self):
         self.in_memory = True
@@ -79,14 +71,21 @@ class airpi_dataset:
         else:
             warnings.warn("Warning! No valid Datset format detected!")
 
-        self.rec_prms['nx']  = np.floor(data.shape[self.rec_prms['dim_seq'][2]]/self.step).astype(np.int32)
-        self.rec_prms['ny']  = np.floor(data.shape[self.rec_prms['dim_seq'][3]]/self.step).astype(np.int32)
-        self.ds_n_dat = self.rec_prms['ny'] * self.rec_prms['nx']
-        self.ds_dims = (self.rec_prms['ny'] , self.rec_prms['nx'], data.shape[self.rec_prms['dim_seq'][0]], data.shape[self.rec_prms['dim_seq'][1]])
-        self.ds_seq = np_sequential_generator(data, self.ds_dims, self.step*5, scaling)
+        n_d1  = np.floor(data.shape[0]/self.step).astype(np.int32)
+        n_d2  = np.floor(data.shape[1]/self.step).astype(np.int32)
+        self.ds_n_dat = n_d1 * n_d2
+        self.ds_dims = (n_d1 , n_d2, data.shape[2], data.shape[3])
+        self.ds_seq = np_sequential_generator(data, self.ds_dims, self.step*5, scaling, order=self.rec_prms['order'])
         self.get_bfm(self.rec_prms['bfm_type']) 
-        self.ds = tf_generator_ds(data, self.ds_dims, self.in_memory, self.rec_prms['beam_in_k'], self.step, self.dose, self.rec_prms['step_size'])
+        self.ds = tf_generator_ds(data, self.ds_dims, self.in_memory, self.rec_prms['beam_in_k'], self.step, self.dose, self.rec_prms['step_size'], self.rec_prms['order'])
         
+        if self.rec_prms['order'][0:2] == ['ry','rx']:
+            self.rec_prms['nx'] = n_d2
+            self.rec_prms['ny'] = n_d1
+        elif self.rec_prms['order'][0:2] == ['rx','ry']:
+            self.rec_prms['nx'] = n_d1
+            self.rec_prms['ny'] = n_d2
+
     
     def get_bfm(self, bfm_type, beam_in = None): 
 
