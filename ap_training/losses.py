@@ -1,31 +1,24 @@
 import tensorflow as tf
-from ap_utils.functions import true_dict, pred_dict, tf_butterworth_filter2D
+from ap_utils.functions import true_dict, pred_dict
 from ap_utils.globals import PRM
 import matplotlib.pyplot as plt
 
-btw_flt = tf_butterworth_filter2D((64,64),0.9,12)
 
-@tf.function(jit_compile=True)
+@tf.function
 def loss(y_true, y_pred):
     ytr, ypr, ytk, ypk = xy2dict(
         y_true, y_pred, space_out="b", plot_out=PRM.debug
     )
-    w = tf.reduce_sum(tf.cast(ytk["msk"],tf.uint16),axis=[1,2], keepdims=True)/4096
-    l_ak = ik(ytk, ypk, (1-w)) + ask(ytk, ypk, w)
-    l_ar = ir(ytr, ypr, (w)) + asr(ytr, ypr)
-    l_pk = pk(ytk, ypk, (1-w))
-    l_pr = pr(ytr, ypr, (w))
+    l_ak = ik(ytk, ypk) + ask(ytk, ypk)
+    l_ar = ir(ytr, ypr) + asr(ytr, ypr)
+    l_pk = pk(ytk, ypk)*3
+    l_pr = pr(ytr, ypr)
     l_ob = obj(ytr, ypr)
-    l_xc_p = (1 - xc_p(ytk, ypk))/2.0
-    l_xc_a = (1 - xc_a(ytk, ypk))/2.0
+    # l_xc_p = (1 - xc_p(ytk, ypr))/2.0
+    # l_xc_a = (1 - xc_a(ytk, ypk))/2.0
     l_xc_obj = (1 - xc_obj(ytr, ypr))/2.0
-    return l_ak + l_ar + l_pk + l_pr + l_xc_p + l_xc_a + l_xc_obj + l_ob
 
-def get_reg_metric(model):
-    def loss_reg(y_true, y_pred):
-        return tf.reduce_sum(model.losses)
-
-    return loss_reg
+    return l_ar + l_pr + l_ob + l_xc_obj + l_pk + l_ak
 
 def metrics():
     """Returns metrics for training"""
@@ -48,28 +41,36 @@ def metrics():
        
     return metrics
 
-@tf.function(jit_compile=True)
+@tf.function
+def log_cosh(y_true, y_pred, w=None):
+    d = y_pred - y_true
+    ls = d + tf.math.softplus(-2.0 * d) - tf.math.log(2.0)
+    if w is not None:
+        ls = ls * w
+    return ls
+
+@tf.function
 def MSE(y_true, y_pred, w=None):
     ls = (y_true - y_pred) ** 2
     if w != None:
         ls *= w
     return ls
 
-@tf.function(jit_compile=True)
+@tf.function
 def MAE(y_true, y_pred, w=None):
     ls = tf.math.abs(y_true - y_pred)
     if w != None:
         ls *= w
     return ls
 
-@tf.function(jit_compile=True)
+@tf.function
 def RMSE(y_true, y_pred, w=None):
     ls = tf.math.sqrt((y_true - y_pred) ** 2)
     if w != None:
         ls *= w
     return ls
 
-@tf.function(jit_compile=True)
+@tf.function
 def rE(y_true, y_pred, msk=None, w=None):
     ls = tf.math.divide_no_nan(tf.math.abs(y_true - y_pred),(0.5*tf.math.abs(y_true)))
     ls = tf.math.minimum(ls, 1.0)
@@ -77,16 +78,16 @@ def rE(y_true, y_pred, msk=None, w=None):
         ls *= w
     return ls
 
-@tf.function(jit_compile=True)
+@tf.function
 def sMAPE(y_true, y_pred,  w=None):
     d =  (y_true - y_pred)
-    if w != None:
-        d *= w
     dn = tf.maximum(y_true, MAE(y_true, y_pred))
     ls = tf.math.abs(tf.math.divide_no_nan(d, dn))
+    if w != None:
+        ls *= w
     return ls
 
-@tf.function(jit_compile=True)
+@tf.function
 def sMAPE2(y_true, y_pred,  w=None):
     d =  (y_true - y_pred)
     if w != None:
@@ -97,80 +98,84 @@ def sMAPE2(y_true, y_pred,  w=None):
     ls *= tf.math.exp(mae)
     return ls
 
-@tf.function(jit_compile=True)
+@tf.function
 def cauchy(y_true, y_pred, w=None):
     ls = tf.math.log(1+tf.math.divide_no_nan((y_pred-y_true)**2,y_true**2))
     if w != None:
         ls *= w
     return ls
 
-@tf.function(jit_compile=True)
+@tf.function
+def huber(y_true, y_pred, w=None):
+    x = tf.math.abs(y_pred - y_true)
+    d = 0.1
+    ls = tf.where(x <= d, 0.5 * x ** 2, 0.5 * d ** 2 + d * (x - d))
+    if w != None:
+        ls *= w
+    return ls
+
+@tf.function
 def ask(y_true, y_pred, w=None):
-    ls = MAE(y_true['amp_sc'], y_pred['amp_sc'])
+    ls = MSE(y_true['amp_sc'], y_pred['amp_sc'])
+    ls = tf.math.reduce_mean(ls, axis=[1,2],keepdims=True)
     if w != None:
         ls *= w
     return tf.math.reduce_mean(ls)
 
-@tf.function(jit_compile=True)
+@tf.function
 def asr(y_true, y_pred, w=None):
-    ls = MAE(y_true['amp_sc'], y_pred['amp_sc'], btw_flt)
+    ls = MSE(y_true['amp_sc'], y_pred['amp_sc'])
+    ls = tf.math.reduce_mean(ls, axis=[1,2],keepdims=True)
     if w != None:
         ls *= w
     return tf.math.reduce_mean(ls)
 
-@tf.function(jit_compile=True)
+
+@tf.function
 def ik(y_true, y_pred, w=None):
-    ls = MAE(y_true['int'], y_pred['int'])
+    ls = MSE(y_true['int'], y_pred['int'])
     ls = tf.math.reduce_sum(ls, axis=[1,2],keepdims=True)
     if w != None:
         ls *= w
     return tf.math.reduce_mean(ls)
 
-@tf.function(jit_compile=True)
+@tf.function
 def ir(y_true, y_pred, w=None):
-    ls = MAE(y_true['int'], y_pred['int'])
+    ls = MSE(y_true['int'], y_pred['int'])
     ls = tf.math.reduce_sum(ls, axis=[1,2],keepdims=True)
     if w != None:
         ls *= w
     return tf.math.reduce_mean(ls)
 
-@tf.function(jit_compile=True)
+@tf.function
 def pk(y_true, y_pred, w=None):
     ls = (MSE(y_true['sin'], y_pred['sin']) + \
           MSE(y_true['cos'], y_pred['cos']))
-    # ls += sMAPE2(y_true['phase'], y_pred['phase'])
+    ls = tf.math.reduce_mean(ls, axis=[1,2],keepdims=True)
     if w != None:
         ls *= w
     return tf.math.reduce_mean(ls)
 
 
-@tf.function(jit_compile=True)
+@tf.function
 def pr(y_true, y_pred, w=None):
-    ls = (MSE(y_true['sin'], y_pred['sin'], y_true['weight']) + \
-          MSE(y_true['cos'], y_pred['cos'], y_true['weight']))
-    # ls += sMAPE2(y_true['phase'], y_pred['phase'], y_true['weight'])
+    ls = (MSE(y_true['sin'], y_pred['sin']) + \
+          MSE(y_true['cos'], y_pred['cos']))
+    ls = tf.math.reduce_mean(ls, axis=[1,2],keepdims=True)
     if w != None:
         ls *= w
     return tf.math.reduce_mean(ls)
 
 
-@tf.function(jit_compile=True)
-def ar(y_true, y_pred, w=None):
-    ls = MAE(y_true['amp'], y_pred['amp'])
-    if w != None:
-        ls *= w
-    return tf.math.reduce_mean(ls)
-
-
-@tf.function(jit_compile=True)
+@tf.function
 def obj(y_true, y_pred, w=None):
-    ls = sMAPE(y_true["obj"], y_pred["obj"], w=y_true['weight'])
+    ls = sMAPE(y_true["obj"], y_pred["obj"])
+    ls = tf.math.reduce_mean(ls, axis=[1,2],keepdims=True)
     if w != None:
         ls *= w
     return tf.math.reduce_mean(ls)
 
-
-@tf.function(jit_compile=True)
+@tf.function
 def fcn_pearson_xc(y_true, y_pred):
     """Pearson correlation coefficient"""
     t_mean = tf.math.reduce_mean(y_true, axis=[1, 2], keepdims=True)
@@ -180,38 +185,47 @@ def fcn_pearson_xc(y_true, y_pred):
     cov = tf.math.reduce_sum(tc * pc, axis=[1, 2])
     t_var = tf.math.reduce_sum(tc * tc, axis=[1, 2])
     p_var = tf.math.reduce_sum(pc * pc, axis=[1, 2])
-    corr = cov / tf.squeeze(tf.math.sqrt(t_var * p_var))
-    # xc = (1 - corr) / 2
-    return tf.math.reduce_mean(corr)
+    xc = cov / tf.squeeze(tf.math.sqrt(t_var * p_var))
+    return xc
 
 
-@tf.function(jit_compile=True)
-def xc_a(y_true, y_pred):
-    return fcn_pearson_xc(y_true["amp_sc"], y_pred["amp_sc"])
+@tf.function
+def xc_a(y_true, y_pred, w=None):
+    xc = fcn_pearson_xc(y_true["amp_sc"], y_pred["amp_sc"])
+    if w != None:
+        xc *= w
+    return tf.math.reduce_mean(xc)
 
 
-@tf.function(jit_compile=True)
-def xc_p(y_true, y_pred):
-    return fcn_pearson_xc(y_true["phase"], y_pred["phase"])
+@tf.function
+def xc_p(y_true, y_pred, w=None):
+    xc = fcn_pearson_xc(y_true["phase"], y_pred["phase"])
+    if w != None:   
+        xc *= w
+    return tf.math.reduce_mean(xc)
 
 
-@tf.function(jit_compile=False)
-def xc_obj(y_true, y_pred):
-    return fcn_pearson_xc(y_true["obj"], y_pred["obj"])
+@tf.function
+def xc_obj(y_true, y_pred, w=None):
+    xc = fcn_pearson_xc(y_true["phase"], y_pred["phase"])
+    if w != None:   
+        xc *= w
+    return tf.math.reduce_mean(xc)
 
-@tf.function(jit_compile=True)
+@tf.function
 def fcn_weight(y_true):
-    amp = y_true["amp"]
+    amp = y_true["amp_sc"]
     w = amp - tf.math.reduce_min(amp, axis=[-1, -2], keepdims=True)
     w = w / tf.math.reduce_max(w, axis=[-1, -2], keepdims=True)
     return w
 
-@tf.function(jit_compile=True)
+@tf.function
 def xy2dict(
     y_true, y_pred, space_out="b", plot_out=False):
 
     ytr, ytk = true_dict(y_true)
     ypr, ypk = pred_dict(y_pred)
+
     ypr["obj"] = tf.math.angle(tf.math.divide_no_nan(ypr["wv"], ytr["probe"]))
 
     ytk["weight"] = fcn_weight(ytk)
@@ -231,6 +245,8 @@ def xy2dict(
 
 def plot_yt_yp(ytr, ypr, ytk, ypk):
     n = 0
+    # for n in range(ytr["amp_sc"].shape[0]):
+    # plt.clf()
     plt.subplot(5, 3, 1).set_axis_off()
     plt.imshow(ytk["amp_sc"][n, ...])
     plt.colorbar()
@@ -280,4 +296,5 @@ def plot_yt_yp(ytr, ypr, ytk, ypk):
     plt.subplot(5, 3, 15).set_axis_off()
     plt.imshow((ytr["obj"][n, ...] - ypr["obj"][n, ...]))
     plt.colorbar()
+    # plt.pause(1)
 

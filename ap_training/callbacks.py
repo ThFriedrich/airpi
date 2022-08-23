@@ -1,6 +1,5 @@
 import gc
-from matplotlib import pyplot as plt
-from tensorflow import summary, keras, math, image, complex64, cast as tf_cast, unstack
+from tensorflow import summary, keras
 from os import path
 
 from tqdm import tqdm
@@ -13,6 +12,7 @@ from ap_training.data_fcns import getTestDataset
 from ap_utils.file_ops import save_hparams
 from ap_utils.plotting import fcn_plot_example, fcn_plot_nn_in_out
 from ap_utils.globals import PRM
+from ap_architectures.layers import Deploy_Output
 
 class airpi_callbacks:
     def __init__(self, prms_o, prms_net):
@@ -62,6 +62,8 @@ class airpi_callbacks:
             self.sample_dir = sample_dir
             self.prms = prms
             self.prms_net = prms_net
+            self.deploy_out = Deploy_Output()
+            self.min_loss = float('inf')
             self.hp_path = path.join(
                 self.prms['cp_path'], 'hyperparameters.pickle')
             self.rec_prms = [{
@@ -114,31 +116,23 @@ class airpi_callbacks:
             for prm in self.rec_prms:
                 prm['step_size'] *= prm['step']
 
-
-        def deploy_out(self, x):
-            x_a, x_p = unstack(x, axis=-1)
-            x_a = tf_cast(x_a**5, complex64)
-            x_p = tf_cast(x_p, complex64)
-            x_o = x_a * math.exp(1j*x_p)
-            return x_o
-
         def run_example_ds(self,epoch):
             for prm in self.rec_prms:
                 try:
                     example_ds = airpi_dataset(
                         prm, prm['path'], prm['key'], prm['dose'], step=prm['step'], in_memory=False)
                     example_ds.ds = example_ds.ds.batch(
-                        64, drop_remainder=False).prefetch(8)
-                    steps = cast['int'](ceil(example_ds.ds_n_dat/64))
-                    t = tqdm(unit=' samples', total=example_ds.ds_n_dat)
+                        256, drop_remainder=False).prefetch(8)
+                    steps = cast['int'](ceil(example_ds.ds_n_dat/256))
+                    t = tqdm(unit=' samples', total=example_ds.ds_n_dat,ascii=' >#')
                     worker = rf.ReconstructionWorker(
-                        64, example_ds.rec_prms, options=prm['options'])
+                        256, example_ds.rec_prms, options=prm['options'])
                     ds_iter = iter(example_ds.ds)
                     for _ in range(steps):
                         set = next(ds_iter)
                         # set['cbeds'] = image.resize(set['cbeds'], [64, 64])
                         pred = self.model.predict_on_batch(set['cbeds'])
-                        pred = self.deploy_out(pred)
+                        pred = self.deploy_out(set['cbeds'], pred)
                         worker.update_patch(pred, set['pos'])
                         t.update(pred.shape[0])
                     # worker.ThreadPool.shutdown(True)
@@ -168,6 +162,9 @@ class airpi_callbacks:
                               step=epoch, max_outputs=256)
 
         def on_epoch_end(self, epoch, logs=None):
+            if logs['val_loss'] < self.min_loss:
+                self.min_loss = logs['val_loss']
+                self.prms['ep'] = epoch
             self.prms['learning_rate'] = float(
                 keras.backend.get_value(self.model.optimizer.lr))
             save_hparams([self.prms, self.prms_net], self.hp_path)
@@ -175,11 +172,6 @@ class airpi_callbacks:
                 pred = self.model.predict(self.ds, steps=1)
                 self.fcn_xy_image_gen(pred, epoch)
                 self.run_example_ds(epoch)
-
-        def on_epoch_begin(self, epoch, logs=None):
-            self.prms['ep'] = epoch
-            return super().on_epoch_begin(epoch, logs=logs)
-    
     
     class LearningRateScheduler(keras.callbacks.ReduceLROnPlateau):
         """Custom learning rate schedule callback """

@@ -1,6 +1,7 @@
+import queue
 import numpy as np
 from threading import Thread
-from multiprocessing import Queue, Event
+from multiprocessing import Event
 import matplotlib.pyplot as plt
 from ap_training.data_fcns import fcn_weight_cbeds
 from tensorflow.data import Dataset as tf_ds
@@ -18,6 +19,7 @@ class tf_generator:
         self.step = step
         self.step_size = step_size
         self.__set_row_getter__(order)
+        self.n_threads = 4
 
         if self.x_rest == 0:
             self.x_rest = None
@@ -28,17 +30,20 @@ class tf_generator:
         self.rw[1:self.nx+1,1,...] = load_dat
         self.rw[1:self.nx+1,2,...] = load_dat
         
-        self.q_row = Queue(maxsize=8)
-        self.q_set = Queue(maxsize=256)
+        self.q_row = queue.Queue(maxsize=32)
+        self.q_set = queue.Queue(maxsize=5000)
 
         self.rows_finished = Event()
         self.finished = Event()
 
         self.rw_thread = Thread(target=self.RowWorker,daemon=True, name='RowWorker')
-        self.co_thread = Thread(target=self.ColumnWorker,daemon=True, name='ColumnWorker')
         self.rw_thread.start()
-        self.co_thread.start()
-        
+
+        self.co_thread = []
+        for i in range(self.n_threads):
+            self.co_thread.append(Thread(target=self.ColumnWorker,daemon=True, name='ColumnWorker_'+str(i)))
+            self.co_thread[i].start()
+
     def RowWorker(self): 
         for rw_i in range(1,self.ny):
             self.rw = np.roll(self.rw,-1,axis=1)
@@ -48,12 +53,11 @@ class tf_generator:
             self.rw[1:self.nx+1,2,...] = load_dat
             self.q_row.put((self.rw, rw_i))
 
-        # Pad last row with empty cbeds
+        # Pad last row with copied cbeds
         self.rw = np.roll(self.rw,-1,axis=1)
         self.rw[1:self.nx+1,2,...] = load_dat
         self.q_row.put((self.rw, rw_i+1))
         self.rows_finished.set()
-
 
     def ColumnWorker(self):  
         while True:
@@ -62,8 +66,9 @@ class tf_generator:
             rw[-1,...] = rw[-2,...]
             for rx in range(1, self.nx+1):
                 self.q_set.put((self.cast_set(rw, rx) , rx, ri))
+            self.q_row.task_done()
             if self.rows_finished.is_set(): 
-                if self.q_row.qsize()==0:
+                if self.q_row.unfinished_tasks==0:
                     self.finished.set()
                     break
 
@@ -87,86 +92,31 @@ class tf_generator:
 
     def cast_set(self, rw, rx):
         set = np.cast[np.float32](rw[rx-1:rx+2,...])
-        # self.__plot_set2d__(set)
-        # set = np.transpose(np.squeeze(set),(2,3,0,1))
-        # set = np.transpose(np.squeeze(set),(2,3,0,1))
-        # set = np.flip(set,2)
+
         set = np.transpose(np.squeeze(set),(3,2,0,1))
-        set = np.flip(set,2)
-        set = np.flip(set,3)
-        # self.__plot_set2d__(set)
-
-
+        set = np.flip(set,[0, 1])
         set = np.reshape(set, self.size_in[2:] + (9,))
-        # self.__plot_set1d__(set)
-        # set = transpose(set,[2,0,1])
+
         set = fcn_weight_cbeds(set, self.step_size)
-        # set = transpose(set,[1, 2, 0])
-        # self.__plot_set__(set)
-        if self.bfm.all() is not None:
-            set = np.concatenate((set,self.bfm),-1)
 
         set = transpose(set,[2,0,1])
         set = squeeze(image.resize(set[...,np.newaxis], (64,64)))
-        # set = squeeze(image.resize(set, (64,64)))
         set = transpose(set,[1, 2, 0])
 
-        # self.__plot_set1d__(set)
+        if self.bfm.all() is not None:
+            set = np.concatenate((set,self.bfm),-1)
         return set
      
-    def __plot_set__(self, set):
-        fig = plt.figure()
-        set_pw = set**0.1
-        # set_min = np.min(set_pw)
-        # set_max = np.max(set_pw)
-        order = [7, 4, 1, 8, 5, 2, 9, 6, 3]
-        for ix, ix_s in enumerate(order):
-            ax = fig.add_subplot(3, 3, ix_s)
-            im = ax.imshow(set_pw[...,ix])
-            ax.set_axis_off()
-            # im.set_clim(set_min, set_max)
-        plt.tight_layout()
-        plt.savefig('set.png')
-        plt.close()
-
-    def __plot_set2d__(self, set):
-        set_pw = set**0.1
-        # set_min = np.min(set_pw)
-        # set_max = np.max(set_pw)
-        fig = plt.figure(figsize=(6,6))
-        for iy in range(3):
-            for ix in range(3):
-                ax = plt.subplot(3,3,iy*3+ix+1)
-                im = ax.imshow(set_pw[...,ix,iy])
-                ax.set_axis_off()
-                # im.set_clim(set_min, set_max)
-        plt.tight_layout()
-        plt.savefig('set2.png')
-        plt.close()
-
-    def __plot_set1d__(self, set):
-        fig = plt.figure(figsize=(18,2))
-        set_pw = set**0.1
-        # set_min = np.min(set_pw)
-        # set_max = np.max(set_pw)
-
-        for iy in range(9):
-            ax = plt.subplot(1,9,iy+1)
-            im = ax.imshow(set_pw[...,iy])
-            ax.set_axis_off()
-            # im.set_clim(set_min, set_max)
-        plt.tight_layout()
-        plt.savefig('set3.png')
-        plt.close()
-
     def __call__(self):  
         while True:
             if self.finished.is_set(): 
-                if self.q_set.qsize()==0:
+                if self.q_set.unfinished_tasks==0:
                     break
             set, ix, iy = self.q_set.get()
+            self.q_set.task_done()
             yield {'cbeds': set, 'pos': np.expand_dims([iy, ix],-1)}
-                    
+
+            
 class tf_generator_in_memory:
     def __init__(self, data, size_in, bfm, step, dose, step_size, order=['rx','ry','kx','ky']):
         self.bfm = bfm

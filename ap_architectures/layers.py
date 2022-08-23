@@ -1,101 +1,111 @@
 
 import tensorflow as tf
-from ap_utils.functions import tf_pi
+from ap_utils.functions import tf_fft2d, tf_pi
 from tensorflow.keras import layers as kl, activations as ka
 from tensorflow_addons.layers import InstanceNormalization, GroupNormalization
 
 
 class Amplitude_Output(kl.Layer):
-    """Layer that creates an activity sparsity regularization loss."""
+    """Amplitude Output Layer"""
 
-    def __init__(self, b_skip=True):
+    def __init__(self, b_skip=False, b_cat=False):
         super(Amplitude_Output, self).__init__()
-        self.scale =  tf.Variable(initial_value=0.0196, dtype=tf.float32, trainable=False)
+        self.scale =  tf.Variable(initial_value=0.00277, dtype=tf.float32, trainable=False)
         self.b_skip = b_skip
+        self.b_cat = b_cat
         self.conv = kl.Conv2D(1, kernel_size=[3, 3], padding='same',
                               strides=[1, 1], kernel_regularizer=None, activity_regularizer=None,
                               activation='linear', dtype=tf.float32)
 
     def call(self, x0, x, training=False):
 
-        x = self.conv(x)
-        if training:
-            x = x * self.scale
-        else:
-            x = tf.maximum(0.0, x) * self.scale
+        if self.b_cat:
+            beam = (x0[...,9, tf.newaxis])**0.2
+            x = tf.concat([x, beam], axis=-1)
+
+        x = self.conv(x) * self.scale
+        
+
         if self.b_skip:
-            # dose = tf.reduce_sum(x0[..., 4], axis=[1, 2])
-            # x_add = (x0[..., 4, tf.newaxis]/dose)**0.05
-            x_add = x0[...,9, tf.newaxis]
+            x_add = (x0[...,9, tf.newaxis])**0.2
             x = kl.add([x, x_add])
-        
+
+            
         if training:
-            ls =  tf.math.reduce_mean(tf.maximum(tf.math.reduce_sum(x**10, axis=[1, 2])-1,0))
+            int = tf.math.reduce_sum(x**10, axis=[1, 2])
+            ls =  tf.math.reduce_mean(tf.maximum(int-1,0))
+            ls +=  tf.math.reduce_mean(tf.maximum(0.3-int,0))
             self.add_loss(ls)
-            self.add_metric(ls, name='int_constraint')
-        
-        
+            self.add_metric(ls, name='int_regularization')
+        if self.scale.trainable:
+            self.add_metric(self.scale, name='amp_scale')
+          
         return x
         
 
 class Phase_Output(kl.Layer):
-    """Layer that creates an activity sparsity regularization loss."""
+    """Phase Output Layer"""
 
-    def __init__(self, b_skip=True):
+    def __init__(self, b_skip=False, b_cat=False):
         super(Phase_Output, self).__init__()
-        self.scale =  tf.Variable(initial_value=0.2, dtype=tf.float32, trainable=False)
+        self.scale =  tf.Variable(initial_value=1e-6, dtype=tf.float32, trainable=True)
         self.b_skip = b_skip
-        self.conv = kl.Conv2D(1, kernel_size=[3, 3], padding='same',
+        self.b_cat = b_cat
+        self.conv_s = kl.Conv2D(1, kernel_size=[3, 3], padding='same',
                               strides=[1, 1], kernel_regularizer=None, activity_regularizer=None,
                               activation='linear', dtype=tf.float32)
 
-
-    def add_constraint(self, x_p, x0):
+    def add_constraint(self, x_p, x0, x_s=None, x_c=None):
         xu = tf.where(x_p > tf_pi, x_p , 0)
         xl = tf.where(x_p < -tf_pi, x_p , 0)
-        ls = tf.math.reduce_sum(tf.math.abs(xu)) + tf.math.reduce_sum(tf.math.abs(xl))
+        ls = tf.math.reduce_sum(tf.math.abs(xu)) + tf.math.reduce_sum(tf.math.abs(xl), axis=[1, 2])
+        ls = tf.math.reduce_mean(ls)
         self.add_loss(ls)
-        self.add_metric(ls, name='phase_constraint')
-        self.add_metric(self.scale, name='phase_scale')
-
-        msk = tf.where(x0[..., 9] > 0.0, True, False)
-        n_bf = tf.math.reduce_sum(tf.cast(msk, tf.float32),axis=[1, 2],keepdims=True)
-        bf_p = tf.where(msk, x0[...,10], 0)
-        bf_pp = tf.where(msk, tf.squeeze(x_p), 0)
-        ls2 = tf.reduce_mean(tf.math.abs(bf_p - bf_pp)/n_bf)*10
-        self.add_loss(ls2)
-        self.add_metric(ls2, name='phase_penalty')
+        self.add_metric(ls, name='phase_regularization')
 
     def call(self, x0, x, training=False):
-        x = self.conv(x) * self.scale
+
+        if self.b_cat:
+            x_add = x0[...,10, tf.newaxis]
+            x = tf.concat([x, x_add], axis=-1)
+
+        x = self.conv_s(x) * self.scale
+
         if self.b_skip:
             x_add = x0[...,10, tf.newaxis]
             x = kl.add([x, x_add])
-        if training:
-            self.add_constraint(x, x0)
+
+        self.add_constraint(x, x0)
+
+        if self.scale.trainable:
+            self.add_metric(self.scale, name='phase_scale')
 
         return x
 
 class Deploy_Output(kl.Layer):
-    """Layer that creates an activity sparsity regularization loss."""
+    """Deploy output layer (only used for deployment)"""
 
     def __init__(self):
         super(Deploy_Output, self).__init__()
+    
+    def cast_complex(self, amp, phase):
+        return tf.cast(amp, tf.complex64) * tf.math.exp(tf.cast(phase, tf.complex64) * 1j)
 
-    def cast(self, x):
+    def cast(self, x0, x):
         x_a = tf.cast(x[...,0]**5, tf.complex64)
-        # bl = tf.reduce_mean(x[:,31:33,31:33,1])-tf.expand_dims(tf.reduce_mean(x[:,31:33,31:33,1],axis=[1,2]),-1)[...,tf.newaxis]
-        # bl = tf.reduce_mean(x[:,32,32,1],keepdims=True)-tf.expand_dims(x[:,32,32,1],-1)[...,tf.newaxis]
         x_p = tf.cast(x[...,1], tf.complex64)
         x_o = tf.squeeze((x_a * tf.exp(1j*x_p)))
-        return x_o
+        x_i = self.cast_complex(x0[..., -2], x0[..., -1])
+        obj = x_o/x_i
+        obj = tf.cast(tf.math.exp(tf.cast(tf.math.angle(obj),tf.complex64)*1j),tf.complex64)
+        # obj = tf_fft2d(obj)
+        return obj
     
-    def call(self, x):
-        x = self.cast(x)
-        return x
+    def call(self, x0, x):
+        return self.cast(x0, x)
 
 class Standardization_Layer(kl.Layer):
-    """Layer that creates an activity sparsity regularization loss."""
+    """Standardization layer. Normalizes the input tensor to have zero mean and unit variance"""
 
     def __init__(self):
         super(Standardization_Layer, self).__init__()
@@ -126,7 +136,8 @@ class Standardization_Layer(kl.Layer):
 
 
 class Block_Normalization(kl.Layer):
-    """Layer that creates an activity sparsity regularization loss."""
+    """Block normalization layer. Normalizes the input tensor to have zero mean and unit variance
+    across the entire tensor (including the batch dimension)"""
 
     def __init__(self, momentum=0.9, epsilon=1e-8):
         super(Block_Normalization, self).__init__()
@@ -157,7 +168,8 @@ class Block_Normalization(kl.Layer):
 
 
 class Grouped_Batch_Normalization(kl.Layer):
-    """Layer that creates an activity sparsity regularization loss."""
+    """Grouped batch normalization layer. Normalizes the input tensor to have zero mean and unit variance
+    across `n` groups (including the batch dimension)"""
 
     def __init__(self, groups=2):
         super(Grouped_Batch_Normalization, self).__init__()
@@ -197,8 +209,6 @@ class Convolution_Block(kl.Layer):
             self.dropout_layer = kl.Dropout(self.dropout)
         else:
             self.dropout_layer = None
-
-        
 
         if self.activation == 0:
             self.activation_layer = None
@@ -252,7 +262,7 @@ class Convolution_Block(kl.Layer):
 
 
 class Conv_Stack(kl.Layer):
-    """Layer implementing a sequence of 2D-Convolution, normalization and activation."""
+    """Layer implementing a sequence of Convolution Blocks (2D-Convolution, normalization and activation)."""
 
     def __init__(self, n_blocks=3, filters=None, kernel_size=[3,3], strides=[1,1], padding='same', activation=5, normalization=5, dropout=None, initializer='glorot_uniform', kernel_regularizer=None, activity_regularizer=None):
         super(Conv_Stack, self).__init__()
@@ -284,7 +294,7 @@ class Conv_Stack(kl.Layer):
 
 
 class Contraction_Block(kl.Layer):
-    """Layer implementing a sequence of 2D-Convolution, normalization and activation."""
+    """Block combining a Convolution Stack and a `n` strided convolution layer, raising the number of filters by a factor of `n`."""
 
     def __init__(self, n_blocks=3, kernel_size=[3, 3], padding='same', activation=5, normalization=5, dropout=None, initializer='glorot_uniform', kernel_regularizer=None, activity_regularizer=None, contraction_fct=2):
         super(Contraction_Block, self).__init__()
@@ -316,7 +326,7 @@ class Contraction_Block(kl.Layer):
 
 
 class Expansion_Block(kl.Layer):
-    """Layer implementing a sequence of 2D-Convolution, normalization and activation."""
+    """Block combining a Convolution Stack and a `n` strided transpose convolution layer, reducing the number of filters by a factor of `n`."""
 
     def __init__(self, n_blocks=3, kernel_size=[3, 3], padding='same', activation=5, normalization=5, dropout=None, initializer='glorot_uniform', kernel_regularizer=None, activity_regularizer=None, expansion_fct=2):
         super(Expansion_Block, self).__init__()

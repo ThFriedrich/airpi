@@ -2,6 +2,7 @@
 import os
 import argparse
 import silence_tensorflow.auto
+import shutil
 
 def fcn_train(prms_o, prms_net, NET):
     '''Train the Network'''
@@ -23,7 +24,8 @@ def fcn_train(prms_o, prms_net, NET):
         optimizer=optimizers.Adam(prms_o['learning_rate']),loss=ls.loss, metrics=ls.metrics())
        
     callbacks = airpi_callbacks(prms_o, prms_net).as_list
-
+    shutil.copy('./ap_training/losses.py', prms_o['cp_path'])
+    os.rename(prms_o['cp_path']+'/losses.py', prms_o['cp_path']+'/losses_'+str(prms_o['ep'])+'.py')
     model.fit(training_ds,
               validation_data=validation_ds,
               validation_steps=validation_steps,
@@ -66,6 +68,8 @@ if __name__ == '__main__':
     parser.add_argument('--epochs_cycle', type=int, help='Epochs to train for all other cycles')
     parser.add_argument('--sample_dir', type=str, help='Directory containing sample datasets')
     parser.add_argument('--dropout', type=float, help='Dropout rate')
+    parser.add_argument('--global_skip', type=int, help='Add skip connection of probe function to NN output')
+    parser.add_argument('--global_cat', type=int, help='Concatenate probe function to last conv-layer input')
     args = vars(parser.parse_args())
 
     if args["gpu_id"] is None:
@@ -76,7 +80,7 @@ if __name__ == '__main__':
 
 
     from tensorflow import config as tf_config
-    # tf_config.optimizer.set_jit("autoclustering")
+    tf_config.optimizer.set_jit("autoclustering")
 
     from ap_utils.file_ops import manage_args
     from ap_utils.globals import debugger_is_active

@@ -1,28 +1,18 @@
+import time
 import numpy as np
-from math import pi
+from math import ceil, floor, pi
 import os
 import h5py
 import matplotlib.pyplot as plt
 import tensorflow as tf
 import warnings
 from tqdm import tqdm
-import nvidia_smi
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from ap_utils.colormaps import parula
+from ap_utils.functions import tf_cast_complex, tf_complex_interpolation, tf_fft2d, tf_ifft2d, tf_normalise_to_one_complex, tf_pad2d, tf_probe_function
 
-def get_gpu_memory():
-
-    nvidia_smi.nvmlInit()
-    handle = nvidia_smi.nvmlDeviceGetHandleByIndex(1)
-    info = nvidia_smi.nvmlDeviceGetMemoryInfo(handle)
-    nvidia_smi.nvmlShutdown()
-
-    return info
-
-from ap_utils.functions import fft2d, ifft2d, interp2dcomplex, tf_normalise_to_one_complex
-
-def load_model(prms_net, X_SHAPE, scale):
+def load_model(prms_net, X_SHAPE, bs):
     '''
     Load the UNET with given parameters and Checkpoint
     '''
@@ -32,9 +22,13 @@ def load_model(prms_net, X_SHAPE, scale):
     else:
         from ap_architectures.models import UNET as ARCH
 
+    if os.path.isfile(prms_net['cp_path']) and prms_net['cp_path'].endswith('tflite'):
+        from ap_architectures.models import TFLITE_Model
+        model = TFLITE_Model(model_path=prms_net['cp_path']+'.tflite')
+
     if os.path.isfile(os.path.join(prms_net['cp_path'], 'checkpoint')):
         print('Use checkpoint: ' + str(prms_net['cp_path']))
-        model = ARCH(prms_net, X_SHAPE, deploy=True).build()
+        model = ARCH(prms_net, X_SHAPE, deploy=True).build(bs)
         model.load_weights(prms_net['cp_path']+'/cp-best.ckpt')
         model.summary()
         return model
@@ -47,8 +41,7 @@ class ReconstructionWorker():
     def __init__(self, cbed_size, rec_prms, options={'b_offset_correction':False}):
         self.ds_ews = options['ew_ds_path']
         self.rec_prms = rec_prms
-        # self.cbed_size_scaled = np.floor(cbed_size*self.rec_prms['oversample'])
-        # if self.cbed_size_scaled % 2 != 0: self.cbed_size_scaled += 1
+        self.y_pos = 0
 
         self.b_offset_correction = options['b_offset_correction']
 
@@ -60,10 +53,10 @@ class ReconstructionWorker():
                                 maxshape=(None, None, int(cbed_size), int(cbed_size)), 
                                 dtype='complex64')
         self.create_obj(cbed_size)  
+        self.__lock__ = Lock()
         if options['threads'] > 1:
             self.__multithreading__ = True
-            self.ThreadPool = ThreadPoolExecutor(1)
-            self.__lock__ = Lock()
+            self.ThreadPool = ThreadPoolExecutor(options['threads'])
         else:
             self.__multithreading__ = False
 
@@ -72,39 +65,40 @@ class ReconstructionWorker():
         self.rec_prms["scale"] = self.rec_prms["oversample"]*self.rec_prms["space_size"]/cbed_size/self.rec_prms["step_size"]
         
         if self.rec_prms["scale"] > 1:
-            self.cbed_size_scaled = int(np.ceil(cbed_size * self.rec_prms["scale"]))
+            self.cbed_size_scaled = int(ceil(cbed_size * self.rec_prms["scale"]))
         else:
             self.cbed_size_scaled = int(cbed_size)
 
         self.rec_prms["px_size"] = self.rec_prms["space_size"]/self.cbed_size_scaled
-    
-        self.rg = np.arange(int(self.cbed_size_scaled))*2.0*np.pi*1j/self.cbed_size_scaled
-        self.st_px = self.rec_prms['step_size']/self.rec_prms['px_size']
+        gmax_s = tf.cast(self.cbed_size_scaled/(2*self.rec_prms["space_size"]),tf.float32)
+
+        self.rg = tf.cast(np.arange(int(self.cbed_size_scaled))*2.0*np.pi*1j/self.cbed_size_scaled, tf.complex64)
+        self.st_px = tf.cast(self.rec_prms['step_size']/self.rec_prms['px_size'],tf.float32)
         self.t = np.zeros((int(self.cbed_size_scaled), int(self.cbed_size_scaled)))
         self.cbed_center = int(np.ceil((self.cbed_size_scaled+1)/2))-1
 
-        self.le_y = int(round(self.rec_prms['ny']*self.rec_prms["step_size"]/self.rec_prms["px_size"])+self.cbed_size_scaled-1)
-        self.le_x = int(round(self.rec_prms['nx']*self.rec_prms["step_size"]/self.rec_prms["px_size"])+self.cbed_size_scaled-1)
+        self.le_y = int(round(self.rec_prms['ny']*self.st_px.numpy())+self.cbed_size_scaled-1)
+        self.le_x = int(round(self.rec_prms['nx']*self.st_px.numpy())+self.cbed_size_scaled-1)
         self.object = np.zeros((self.le_y, self.le_x), dtype='complex64')
+
+        self.beam_k = self.pad_cbed(self.rec_prms['beam_in_k'])
+        self.beam_r = tf_cast_complex(self.rec_prms['beam_in_r'][...,0], self.rec_prms['beam_in_r'][...,1])
+        self.beam_r_scaled = tf_probe_function(self.rec_prms['E0'], self.rec_prms['apeture'], gmax_s,
+                                          self.cbed_size_scaled, self.rec_prms['aberrations'], domain='r', type='complex', refine=True)
+        self.beam_r = tf_normalise_to_one_complex(self.beam_r)
+
         
-        beam_k = self.rec_prms['beam_in_k'][...,0]*np.exp(1j*self.rec_prms['beam_in_k'][...,1])
-        beam_k = interp2dcomplex(beam_k,out_size=[64,64])
-        beam_k = tf_normalise_to_one_complex(beam_k)
-        beam_k = self.pad_cbed(beam_k)
-
-        beam_r = fft2d(beam_k)/self.cbed_size_scaled
-
-        self.rec_prms['beam_in_r'] = tf.cast(beam_r,tf.complex64)
-        self.rec_prms['beam_in_k'] = tf.cast(beam_k,tf.complex64)
-        
-        beam_r_int = np.abs(beam_r)**2
-        self.idx_b = np.nonzero(beam_r_int>0.1*(np.max(beam_r_int))) # where the beam has significant intensity
-
-        self.t[self.idx_b] = 1
-        self.idx_bb = self.translate_idx()
+        beam_r_int = np.abs(self.beam_r)**2
+        beam_r_sc_int = np.abs(self.beam_r_scaled)
+        # where the beam has significant intensity
+        self.idx_b = np.nonzero(beam_r_int>0.1*(np.max(beam_r_int))) 
+        self.idx_b_sc = np.nonzero(beam_r_sc_int>0.1*(np.max(beam_r_sc_int))) 
         weight = beam_r_int
-        weight = weight[self.idx_b]
-        self.weight = weight / np.sum(weight)
+        self.weight = tf.cast(weight / np.sum(weight),tf.complex64)
+        
+        self.t[self.idx_b_sc] = 1
+        self.idx_bb = self.translate_idx()
+
 
     def pad_cbed(self, cbed_in):
         nx_in = np.size(cbed_in,0)
@@ -113,59 +107,69 @@ class ReconstructionWorker():
             center_in = self.find_center(nx_in)
             center_out = self.find_center(nx_out)
             t = int(center_out-center_in)
-            cbed_out = np.zeros((nx_out,nx_out), dtype='complex64')
+            cbed_out = np.zeros((nx_out, nx_out), dtype='complex64')
             cbed_out[t:t+nx_in,t:t+nx_in] = cbed_in
+        else:
+            cbed_out = cbed_in
+        return cbed_out
+
+    @tf.function
+    def tf_pad_cbed(self, cbed_in):
+        nx_in = int(cbed_in.shape[1])
+        nx_out = int(self.cbed_size_scaled)
+        b_even = int(nx_out % 2 != 0)
+        nx = floor((nx_out-nx_in)/2)
+        pads = [nx, nx+b_even, nx, nx+b_even]
+        if nx_out/nx_in > 1:
+            cbed_out = tf_pad2d(cbed_in, pads)
         else:
             cbed_out = cbed_in
         return cbed_out
 
     def find_center(self, nx):
         return np.ceil((nx + 1) / 2)
-    
+
     def locate(self, x, y):
-        xx = (x-1.0)*self.st_px + 1.0
-        yy = (y-1.0)*self.st_px + 1.0
-        x_int = np.round(xx)
-        x_frac = xx-x_int
-        y_int = np.round(yy)
-        y_frac = yy-y_int
+        xx = (x-1)*self.st_px
+        yy = (y-1)*self.st_px
+
+        x_int = tf.math.floor(xx)
+        x_frac = -tf.cast(xx-x_int,tf.complex64)
+        y_int = tf.math.floor(yy)
+        y_frac = -tf.cast(yy-y_int,tf.complex64)
         return x_int, x_frac, y_int, y_frac
 
     def translate_idx(self):
         tt = np.zeros((self.le_y, self.le_x))
         tt[0:int(self.cbed_size_scaled),0:int(self.cbed_size_scaled)] = self.t
-        return np.nonzero(tt==1)
+        return np.nonzero(tt == 1)
 
+    @tf.function
     def fcn_beam_shift_px(self, y, x):
-        xlin = np.exp(self.rg*y)
-        ylin = np.exp(self.rg*x)
-        Y,X = np.meshgrid(ylin,xlin)
+        xlin = tf.math.exp(self.rg*x)
+        ylin = tf.math.exp(self.rg*y)
+        X,Y = tf.meshgrid(xlin, ylin)
         phase = X*Y
         return phase/phase[self.cbed_center, self.cbed_center]
 
-    def build_obj(self, beam_out, shift_y, shift_x):
-        phase_ramp = self.fcn_beam_shift_px(shift_y, shift_x)
-        beam_in = self.rec_prms['beam_in_k'] * phase_ramp
-        # beam_in_s = tf.squeeze(tf_FourierShift2D(beam_in[tf.newaxis,...], tf.constant([0.5, 0.5], dtype=tf.float32,shape=[1,2])))
-        # beam_out_s = tf.squeeze(tf_FourierShift2D(beam_out[tf.newaxis,...], tf.constant([0.5, 0.5], dtype=tf.float32,shape=[1,2])))
-        beam_out_s = beam_out * phase_ramp
-        beam_in_r = fft2d(beam_in)/self.cbed_size_scaled
-        beam_out_r = fft2d(beam_out_s)/self.cbed_size_scaled
-        # self.plot_output(beam_out_r, beam_out_r / beam_in_r)
-        return beam_out_r, beam_in_r
+    @tf.function
+    def scale_output(self, wave):
+        beam_out_r = tf_complex_interpolation(wave,out_size=[self.cbed_size_scaled, self.cbed_size_scaled])
+        return beam_out_r
 
-    def update(self, obj, coor):
-        idx_bb = (self.idx_bb[0]+int(coor[0]-1),self.idx_bb[1]+int(coor[1])-1)
-        phase = np.angle(obj)
+
+    def update_obj(self, obj, coor):
+        idx_bb = (self.idx_bb[0]+int(coor[0]),self.idx_bb[1]+int(coor[1]))
+        phase = np.angle(obj[self.idx_b_sc])
         if self.b_offset_correction:
-            if np.all(coor == [1,1]):
+            if np.all(coor == [0,0]):
                 offset = 0
             else:
                 phase_big = np.angle(self.object[idx_bb])
-                offset = np.sum((phase-phase_big)*self.weight)
-            obj = np.exp(1j*(phase-offset*0.6))*self.weight
+                offset = np.sum((phase-phase_big))
+            obj = np.exp(1j*(phase-offset*0.6))
         else:
-            obj = np.exp(1j*phase)*self.weight
+            obj = obj[self.idx_b_sc]
         
         if self.__multithreading__:
             with self.__lock__:
@@ -173,32 +177,25 @@ class ReconstructionWorker():
         else:
             self.object[idx_bb] += obj
 
+    @tf.function
+    def shift_obj_patch(self, obj, y_frac, x_frac):
+        phase_ramp = self.fcn_beam_shift_px(y_frac, x_frac)
+        obj = tf_ifft2d(obj * phase_ramp)
+        return obj
 
-    def update_patch(self, data, yx_ov=None):
-        if yx_ov is not None:
-            data_c = []
-            data_c.append(data)
-            data_c.append(yx_ov)
-            data = data_c
+    def update_patch(self, data, yx):
 
-        for b in range(data[0].shape[0]):
-            beam_out = tf.squeeze(data[0][b,...])
-            yx = np.cast['float'](data[1][b,...])
-            
-            x_int, x_frac, y_int, y_frac = self.locate(yx[1],yx[0])  
-            beam_out = self.pad_cbed(beam_out)
-            beam_out, beam_in = self.build_obj(beam_out, y_frac, x_frac)
-            obj = beam_out[self.idx_b] / beam_in[self.idx_b]
-            self.update(obj, [y_int, x_int])
+        yxb = tf.cast(yx,tf.float32)
+        x_int, x_frac, y_int, y_frac = self.locate(yxb[:,1],yxb[:,0])
+    
+        for b in range(data.shape[0]):
+            obj_patch = self.shift_obj_patch(self.tf_pad_cbed(tf_fft2d(data[b,...]*self.weight)), y_frac[b], x_frac[b])
+            self.update_obj(obj_patch.numpy(), [y_int[b], x_int[b]])
 
             if self.ds_ews is not None:
                 self.ds_write_to_disk(data,b)
-
-            # with self.__lock__:
-            #     self.plot_output(beam_out, beam_out / beam_in)
-            #     self.plot_output(tf.squeeze(data[0][b,...]), beam_out / beam_in)
-                # self.object[start_xy[0]:start_xy[0]+self.cbed_size_scaled, start_xy[1]:start_xy[1]+self.cbed_size_scaled] += obj
-
+            with self.__lock__:
+                self.y_pos = np.max([self.y_pos, int(y_int[b])])
             
     def ds_write_to_disk(self, data, b):
         pos = data[1][b,...] 
@@ -224,8 +221,8 @@ class ReconstructionWorker():
 
         im.append(axes[0,0].imshow(np.abs(pred)**0.2))
         im.append(axes[0,1].imshow(np.angle(pred)))
-        im.append(axes[1,0].imshow(np.abs(self.rec_prms['beam_in_r'])))
-        im.append(axes[1,1].imshow(np.angle(self.rec_prms['beam_in_r'])))
+        im.append(axes[1,0].imshow(np.abs(self.beam_r)))
+        im.append(axes[1,1].imshow(np.angle(self.beam_r)))
         im.append(axes[2,0].imshow(np.abs(obj)))
         im.append(axes[2,1].imshow(np.angle(obj)))
 
@@ -237,18 +234,15 @@ class ReconstructionWorker():
         plt.savefig('prediction_a.png')
         plt.close(fig)
 
-def update_obj_fig(writer, obj_fig, fig, xy):
-    le_half = int(writer.cbed_size_scaled//2)
-    st_px = writer.rec_prms['step_size']/writer.rec_prms['px_size']
-    data = np.angle(writer.object[le_half:-le_half,le_half:-le_half])
-    ylim = int(st_px*np.max(xy[:,0]))
-    data[ylim:,:] = np.core.nan
+def update_obj_fig(worker, obj_fig, fig):
+    le_half = int(worker.cbed_size_scaled//2)
+    data = np.angle(worker.object[le_half:-(le_half),le_half:-(le_half)])
     obj_fig.set_data(data)
     obj_fig.set_clim(np.nanmin(data), np.nanmax(data))
     fig.canvas.flush_events() 
 
-def plot_set_init(writer):
-    le_half = int(writer.cbed_size_scaled//2)
+def plot_set_init(worker):
+    le_half = int(worker.cbed_size_scaled//2)
     set_fig, set_ax = plt.subplots(3,5)
     set_ax_obj = []
     for iy in range(3):
@@ -260,17 +254,19 @@ def plot_set_init(writer):
     set_ax_obj.append(set_ax[1, 3].imshow(np.ones((128,128))))
     set_ax_obj.append(set_ax[1, 4].imshow(np.ones((128,128))))
 
-    set_ax_obj.append(set_ax[2, 3].imshow(np.angle(writer.object[le_half:-le_half,le_half:-le_half]),vmin=-pi, vmax=pi))
+    set_ax_obj.append(set_ax[2, 3].imshow(np.angle(worker.object[le_half:-(le_half),le_half:-(le_half)]),vmin=-pi, vmax=pi))
     set_ax_obj.append(set_ax[2, 4].imshow(np.ones((128,128))))
     [axi.set_axis_off() for axi in set_ax.ravel()]
     set_fig.tight_layout()
     return set_fig, set_ax_obj
 
-def plot_set_update(set_ax_obj, set_fig, set, pred, pos, writer):
+def plot_set_update(set_ax_obj, set_fig, set, pred, pos, worker):
         order = [8, 5, 2, 7, 4, 1, 6, 3, 0]
         # order = np.flip(order)
-        le_half = int(writer.cbed_size_scaled//2)
-        st_px = writer.rec_prms['step_size']/writer.rec_prms['px_size']
+        le_half = int(worker.cbed_size_scaled//2)
+        pos = tf.cast(pos,tf.float32)
+        st_px = worker.rec_prms['step_size']/worker.rec_prms['px_size']
+        x_int, x_frac, y_int, y_frac = worker.locate(pos[:,1],pos[:,0])
         for ib, set_b in enumerate(set['cbeds']):
             if (ib+1) == len(set['cbeds']):
                 for ix, ix_s in enumerate(order):
@@ -278,72 +274,85 @@ def plot_set_update(set_ax_obj, set_fig, set, pred, pos, writer):
                     set_ax_obj[ix_s].set_data(data)
                     set_ax_obj[ix_s].set_clim(np.min(data), np.max(data))
             
-                pred_b = np.squeeze(pred[ib,...])
-                pred_b = writer.pad_cbed(pred_b)
-                pred_br = ifft2d(pred_b)*writer.cbed_size_scaled
+        data = pred
+        obj_patch = (data[0,...]*worker.weight)
+        # obj_patch = self.shift_obj_patch(self.tf_pad_cbed(tf_fft2d(data[b,...]*worker.weight)), y_frac[0], x_frac[0])
+        pred_br = tf_fft2d(obj_patch)
+        # pred_br = (worker.shift_obj_patch(worker.tf_pad_cbed(tf_fft2d(obj_patch)), y_frac[0], x_frac[0]))
 
-                set_ax_obj[9].set_data(np.angle(pred_b))
-                set_ax_obj[9].set_clim(-pi, pi)
-                set_ax_obj[10].set_data(np.abs(pred_b))
-                set_ax_obj[10].set_clim(np.min(np.abs(pred_b)), np.max(np.abs(pred_b)))
+        obj_patch = (obj_patch)
+        set_ax_obj[9].set_data(np.angle(obj_patch))
+        set_ax_obj[9].set_clim(-pi, pi)
+        set_ax_obj[10].set_data(np.abs(obj_patch))
+        set_ax_obj[10].set_clim(np.min(np.abs(obj_patch)), np.max(np.abs(obj_patch)))
 
-                set_ax_obj[11].set_data(np.angle(pred_br))
-                set_ax_obj[11].set_clim(-pi, pi)
-                aa = np.abs(pred_br)
-                set_ax_obj[12].set_data(aa)
-                set_ax_obj[12].set_clim(np.min(aa), np.max(aa))
+        set_ax_obj[11].set_data(np.angle(pred_br))
+        set_ax_obj[11].set_clim(-pi, pi)
+        aa = np.abs(pred_br)
+        set_ax_obj[12].set_data(aa)
+        set_ax_obj[12].set_clim(np.min(aa), np.max(aa))
 
-                data = np.angle(writer.object[le_half:-le_half,le_half:-le_half])
-                ylim = int(st_px*np.max(pos[:,0]))
-                data[ylim-1:,:] = np.core.nan
-                set_ax_obj[13].set_data(data)
-                set_ax_obj[13].set_clim(np.nanmin(data), np.nanmax(data))
+        data = np.angle(worker.object[le_half:-(le_half),le_half:-(le_half)])
+        data[worker.y_pos:,:] = np.core.nan
+        set_ax_obj[13].set_data(data)
+        set_ax_obj[13].set_clim(np.nanmin(data), np.nanmax(data))
+        msk = np.zeros_like(obj_patch, dtype=float)
+        msk[worker.idx_b] = 1.0
 
-                beam = writer.rec_prms['beam_in_r']
-                obj = np.angle(pred_br/beam)
-                msk = np.zeros_like(obj)
-                msk[writer.idx_b] = 1.0
+        set_ax_obj[14].set_data(np.angle(obj_patch)*msk)
+        set_ax_obj[14].set_clim(-np.pi, np.pi)
+        set_fig.canvas.flush_events() 
 
-                set_ax_obj[14].set_data(obj*msk)
-                set_ax_obj[14].set_clim(-np.pi, np.pi)
-                set_fig.canvas.flush_events() 
-    # plt.savefig('set.png')
 
-def retrieve_phase_from_generator(ds_class, prms_net, options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None}):
-    plt.ion()
-    # bs = int(pow(2, np.floor(np.log(gpu_mem/60/scale)/np.log(2))))
-    bs = 256
-    steps= np.cast[np.int32](np.ceil(ds_class.ds_n_dat/bs))
-    writer = ReconstructionWorker(64, ds_class.rec_prms, options)
-    # ds_class.get_bfm('avrg')
-
-    model = load_model(prms_net, ds_class.ds._flat_shapes[0], writer.cbed_size_scaled)
-    ds_class.ds = ds_class.ds.batch(bs, drop_remainder=False).prefetch(8)
-    ds_iter = iter(ds_class.ds)
+def retrieve_phase_from_generator(ds_class, prms_net, options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None, 'batch_size':512}, model=None, live_update=True):
+    if 'batch_size' not in options:
+        options['batch_size'] = 32
+    if 'threads' not in options:
+        options['threads'] = 1
+    if 'b_offset_correction' not in options:
+        options['b_offset_correction'] = False
+    if 'ew_ds_path' not in options:
+        options['ew_ds_path'] = None
     
-    fig, ax = plt.subplots()
-    le_half = int(writer.cbed_size_scaled//2)
-    obj_fig = ax.imshow(np.angle(writer.object[le_half:-le_half,le_half:-le_half]),vmin=-pi, vmax=pi, cmap=parula)
-    set_fig, set_ax = plot_set_init(writer)
+    steps= np.cast[np.int32](np.ceil(ds_class.ds_n_dat/options['batch_size']))
+    worker = ReconstructionWorker(64, ds_class.rec_prms, options)
+    le_half = int(worker.cbed_size_scaled//2)
+
+    if live_update:
+        plt.ion()
+        fig, ax = plt.subplots()
+        obj_fig = ax.imshow(np.angle(worker.object[le_half:-le_half,le_half:-le_half]),vmin=-pi, vmax=pi, cmap=parula)
+        # set_fig, set_ax = plot_set_init(worker)
+
+    if model is None:
+        model = load_model(prms_net, ds_class.ds._flat_shapes[0], options['batch_size'])
+
+    ds_iter = iter(ds_class.ds.batch(options['batch_size'], drop_remainder=False).prefetch(8))
+    
     t= tqdm(unit=' samples', total=ds_class.ds_n_dat)
     for _ in range(steps):
-        # try:
         set = next(ds_iter)
         pred = model.predict_on_batch(set['cbeds'])
-        if writer.__multithreading__:
-            writer.ThreadPool.submit(writer.update_patch, pred, set['pos'])
+        if worker.__multithreading__:
+            worker.ThreadPool.submit(worker.update_patch, pred, set['pos'])
         else:
-            writer.update_patch(pred, set['pos']) 
-        update_obj_fig(writer, obj_fig, fig, set['pos'])
-        plot_set_update(set_ax, set_fig, set, pred, set['pos'], writer)
+            worker.update_patch(pred, set['pos'])
+        if live_update: 
+            update_obj_fig(worker, obj_fig, fig)
+            # plot_set_update(set_ax, set_fig, set, pred, set['pos'], worker)
         t.update(pred.shape[0])
-        # except StopIteration:
-        #     print('Generator ran out of Data!')
-    if writer.__multithreading__:
-        writer.ThreadPool.shutdown(True)
+       
+    if worker.__multithreading__:
+        while not worker.ThreadPool._work_queue.empty():
+            if live_update:
+                update_obj_fig(worker, obj_fig, fig)
+            time.sleep(0.1)
+        worker.ThreadPool.shutdown(True)
     t.close()
-    update_obj_fig(writer, obj_fig, fig, set['pos'])
-    # plt.savefig('reconstruction7.png')
-    plt.colorbar(obj_fig,ax=ax)
-    plt.show(block=True)
+    if live_update:
+        update_obj_fig(worker, obj_fig, fig)
+        plt.colorbar(obj_fig,ax=ax)
+        plt.show(block=True)
+
+    return worker.object[le_half:-(le_half),le_half:-(le_half)]
     

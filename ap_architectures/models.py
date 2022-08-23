@@ -1,7 +1,8 @@
 from tensorflow import keras as tfk
 from ap_architectures.layers import *
 import tensorflow as tf
-from ap_architectures.layers_complex import *
+if tuple(map(int, tf.__version__.split('.'))) >= (2,9,0):
+    from ap_architectures.layers_complex import *
 
 
 class UNET(tfk.Model):
@@ -16,6 +17,7 @@ class UNET(tfk.Model):
         self.activation = int(prms['activation'])
         self.stack_n = prms['stack_n']
         self.global_skip = bool(prms['global_skip'])
+        self.global_cat = bool(prms['global_cat'])
         self._name = "UNET_" + str(self.filters) + "_D" + str(self.depth) + \
             "_N" + str(self.normalization) + "_A" + str(self.activation)
 
@@ -39,10 +41,9 @@ class UNET(tfk.Model):
                                                    activity_regularizer=self.a_regul, dropout=self.dropout, normalization=self.normalization, activation=self.activation)
         self.Contraction_Block = []
         self.Expansion_Block = []
-        self.Amplitude_Output = Amplitude_Output(b_skip=self.global_skip)
-        self.Phase_Output = Phase_Output(b_skip=self.global_skip)
-        self.Conv_Stack = Conv_Stack(self.stack_n, kernel_size=self.kernel, initializer=self.kernel_initializer, kernel_regularizer=self.w_regul,
-                                     activity_regularizer=self.a_regul, dropout=self.dropout, normalization=self.normalization, activation=self.activation)
+        self.Amplitude_Output = Amplitude_Output(b_skip=self.global_skip, b_cat=self.global_cat)
+        self.Phase_Output = Phase_Output(b_skip=self.global_skip, b_cat=self.global_cat)
+        
         for _ in range(self.depth):
             self.Contraction_Block.append(Contraction_Block(initializer=self.kernel_initializer, kernel_regularizer=self.w_regul,
                                           activity_regularizer=self.a_regul, dropout=self.dropout, normalization=self.normalization, activation=self.activation))
@@ -50,9 +51,9 @@ class UNET(tfk.Model):
                                         activity_regularizer=self.a_regul, dropout=self.dropout, normalization=self.normalization, activation=self.activation))
         self.Deploy_Output = Deploy_Output()
 
-    def build(self):
+    def build(self, bs=None):
         super().build(input_shape=(
-            None, self.x_shape[0], self.x_shape[1], self.x_shape[2]))
+            bs, self.x_shape[0], self.x_shape[1], self.x_shape[2]))
         return self
 
     def call(self, inputs, training=False):
@@ -73,12 +74,12 @@ class UNET(tfk.Model):
         x_o = tf.concat((x_a, x_p), -1)
 
         if self.deploy:
-            return self.Deploy_Output(x_o)
+            return self.Deploy_Output(inputs, x_o)
         else:
             return x_o
 
-    def summary(self):
-        tfk.Model(inputs=self.Input, outputs=self.call(self.Input)).summary()
+    # def summary(self):
+    #     tfk.Model(inputs=self.Input, outputs=self.call(self.Input)).summary()
 
 
 class CNET(tfk.Model):
@@ -150,5 +151,24 @@ class CNET(tfk.Model):
         else:
             return x_o
 
-    def summary(self):
-        tfk.Model(inputs=self.Input, outputs=self.call(self.Input)).summary()
+class TFLITE_Model:
+    def __init__(self, model_path):
+        self.model_path = model_path
+
+        # Load the TFLite model and allocate tensors.
+        self.interpreter = tf.lite.Interpreter(model_path=model_path)
+        self.interpreter.allocate_tensors()
+
+        # Get input and output tensors.
+        self.input_details = self.interpreter.get_input_details()
+        self.output_details = self.interpreter.get_output_details()
+
+        # Test the model on random input data.
+        self.input_shape = self.input_details[0]['shape']
+
+        
+    def predict_on_batch(self, input_data):
+        self.interpreter.set_tensor(self.input_details[0]['index'], input_data)
+        self.interpreter.invoke()
+        result = self.interpreter.get_tensor(self.output_details[0]['index'])
+        return result

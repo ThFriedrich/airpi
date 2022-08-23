@@ -1,10 +1,10 @@
 """Module containing Functions for Tensorflow Training and Grid Search"""
 import numpy as np
 import tensorflow as tf
-from ap_utils.functions import tf_binary_mask, tf_binary_mask_r, tf_ifft2d_A_p, tf_normalise_to_one_amp, tf_pi, tf_probe_k
+from ap_utils.functions import tf_binary_mask, tf_binary_mask_r, tf_cast_complex, tf_fft2d_A_p, tf_ifft2d_A_p, tf_normalise_to_one_amp, tf_normalise_to_one_complex, tf_pi, tf_probe_function, tf_probe_k, tf_complex_interpolation
 from ap_utils.globals import PRM
 
-@tf.function(jit_compile=True)
+# @tf.function
 def cast_float32(x: tf.Tensor, meta: tf.Tensor, shape: tf.TensorShape) -> tf.Tensor:
     x = tf.cast(x, tf.float32)
     x = x * tf.broadcast_to(tf.expand_dims(meta, 0), shape) / 65536
@@ -12,7 +12,7 @@ def cast_float32(x: tf.Tensor, meta: tf.Tensor, shape: tf.TensorShape) -> tf.Ten
     return x
 
 
-@tf.function(jit_compile=True)
+@tf.function
 def cast_wave_float32(x: tf.Tensor, sc: tf.Tensor) -> tf.Tensor:
     # Amp & Phase
     sh_s = tf.TensorShape((64, 64))
@@ -23,7 +23,7 @@ def cast_wave_float32(x: tf.Tensor, sc: tf.Tensor) -> tf.Tensor:
     return y
 
 
-@tf.function(jit_compile=False)
+@tf.function
 def fcn_decode_tfrecords(record):
     '''Decoding/Preprocessing of TFRecord Dataset'''
     features = {
@@ -63,10 +63,11 @@ def fcn_decode_tfrecords(record):
     lab_r = cast_wave_float32(lab_r, sc_yr)
     prob_r = cast_wave_float32(prob_r, sc_pr)
 
+
     return x, lab_k, lab_r, prob_r, prms
 
 
-@tf.function(jit_compile=True)
+@tf.function
 def fcn_rnd_no_sample(x, yk, yr, probe, p):
     rnd = tf.random.uniform([])
     x = tf.cond(
@@ -80,21 +81,23 @@ def fcn_rnd_no_sample(x, yk, yr, probe, p):
     return x, yk, yr
 
 
-@tf.function(jit_compile=True)
-def comp_probe_k(x: tf.Tensor, prms: tf.Tensor) -> tf.Tensor:
-    a, p = tf_probe_k(prms[0], prms[1], prms[2], 64, [-1, 0.001])
-    pr = tf.stack([a, p], axis=-1)
-    return tf_normalise_to_one_amp(pr)
+@tf.function
+def comp_probe_k(prms: tf.Tensor) -> tf.Tensor:
+    pk = tf_probe_function(prms[0], prms[1], prms[2], 64, [-1, 0.001], domain='k', type="complex", refine=False)
+    pk = tf_normalise_to_one_complex(pk)
+    pk = tf.stack([tf.math.abs(pk), tf.math.angle(pk)], axis=-1)
+    return pk
 
 
-@tf.function(jit_compile=False)
+@tf.function
 def fcn_decode_train(x, lab_k, lab_r, prob_r, prms):
     """Decoding/Preprocessing of HDF5 Dataset for Training (random Poisson)"""
 
-    probe_k = comp_probe_k(x, prms)
+    prob_k = comp_probe_k(prms)
+    lab_k = tf_fft2d_A_p(lab_r)
 
     # Random no-sample
-    x, lab_k, lab_r = fcn_rnd_no_sample(x, lab_k, lab_r, probe_k, 0.03)
+    # x, lab_k, lab_r = fcn_rnd_no_sample(x, lab_k, lab_r, prob_k, 0.05)
 
     # Add Poisson Noise for random dose
     rnd = tf.random.uniform(
@@ -105,19 +108,21 @@ def fcn_decode_train(x, lab_k, lab_r, prob_r, prms):
     if PRM.scale_cbeds:
         x = fcn_weight_cbeds(x, prms[3])
 
-    x = tf.concat([x, probe_k], -1)
-    # x = tf.concat([x, probe_k[...,0,tf.newaxis]], -1)
+    x = tf.concat([x, prob_r], -1)
 
-    msk_k = tf_binary_mask(probe_k[..., 0])[..., tf.newaxis]
+    msk_k = tf_binary_mask(prob_k[..., 0])[..., tf.newaxis]
     msk_r = tf_binary_mask_r(prms[0], prms[1], prms[2], 64)[..., tf.newaxis]
     y = tf.concat([lab_k, lab_r, prob_r, msk_r, msk_k], -1)
 
     return x, y
 
 
-@tf.function(jit_compile=False)
+@tf.function
 def fcn_decode_val(x, lab_k, lab_r, prob_r, prms):
     """Decoding/Preprocessing of HDF5 Dataset for Validation (random Poisson, doses same)"""
+
+    prob_k = comp_probe_k(prms)
+    lab_k = tf_fft2d_A_p(lab_r)
 
     # Generate a seed based on sample meta-data
     prm_prod = tf.reduce_prod(prms[0:2])
@@ -135,18 +140,16 @@ def fcn_decode_val(x, lab_k, lab_r, prob_r, prms):
     if PRM.scale_cbeds:
         x = fcn_weight_cbeds(x, prms[3])
 
-    probe_k = comp_probe_k(x, prms)
-    x = tf.concat([x, probe_k], -1)
-    # x = tf.concat([x, probe_k[...,0,tf.newaxis]], -1)
+    x = tf.concat([x, prob_r], -1)
 
-    msk_k = tf_binary_mask(probe_k[..., 0])[..., tf.newaxis]
+    msk_k = tf_binary_mask(prob_k[..., 0])[..., tf.newaxis]
     msk_r = tf_binary_mask_r(prms[0], prms[1], prms[2], 64)[..., tf.newaxis]
     y = tf.concat([lab_k, lab_r, prob_r, msk_r, msk_k], -1)
 
     return x, y
 
 
-@tf.function(jit_compile=True)
+@tf.function
 def fcn_weight_cbeds(cbeds, step_size):
     """Weighting of input CBEDs, according to step size"""
     d1 = (1 / step_size) / 50

@@ -50,6 +50,7 @@ def get_default_prms(hp_path, log_path):
         "a_regul": None,
         "dropout": None,
         "global_skip": True,
+        "global_cat": False,
     }
     return prms, prms_net
 
@@ -74,7 +75,7 @@ def manage_args(args):
 
     cwd = os.path.abspath(os.path.curdir)
     hp_path = os.path.join(cwd, "Ckp", "Training", model_name)
-    log_path = os.path.join(cwd, "Logs", "Training_5",model_name)
+    log_path = os.path.join(cwd, "Logs", "Training",model_name)
 
     prms, prms_net = load_hyperparameters(hp_path, log_path)
 
