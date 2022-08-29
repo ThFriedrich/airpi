@@ -1,7 +1,10 @@
 Logs
 Images
 Data_64
-Ckp
+Ckp/*
+!Ckp/Training
+Ckp/Training/*
+!Ckp/Training/V_32_D3_sk_r10
 *.pyc
 Scripts/**
 *.png

@@ -74,7 +74,7 @@ class airpi_dataset:
         n_d2  = np.floor(data.shape[1]/self.step).astype(np.int32)
         self.ds_n_dat = n_d1 * n_d2
         self.ds_dims = (n_d1 , n_d2, data.shape[2], data.shape[3])
-        bfm_step = np.max((1,self.ds_n_dat//1000))
+        bfm_step = np.max((1,self.ds_n_dat//10000))
         self.ds_seq = np_sequential_generator(data, self.ds_dims, bfm_step, scaling, order=self.rec_prms['order'])
         self.get_bfm(self.rec_prms['bfm_type']) 
         # data = da.from_array(data, chunks=(3, 3, data.shape[2], data.shape[3]))
@@ -109,7 +109,7 @@ class airpi_dataset:
             hough_res = hough_circle(edges, hough_radii)
             accums, cx, cy, radius = hough_circle_peaks(hough_res, hough_radii,
                                                     total_num_peaks=1)
-            self.rec_prms['gmax'] = np.cast[np.float32](tf_mrad_2_rAng(self.rec_prms['E0'],self.rec_prms['apeture'])*(self.ds_dims[2]/2/radius[0]))
+            self.rec_prms['gmax'] = np.cast[np.float32](tf_mrad_2_rAng(self.rec_prms['E0'],self.rec_prms['apeture'])*(self.ds_dims[2]/2/(radius[0]+1)))
             
             probe = tf_probe_function(self.rec_prms['E0'] , self.rec_prms['apeture'] , self.rec_prms['gmax'] , 64, self.rec_prms['aberrations'], domain='r', type='complex',refine=True)
             probe = tf_normalise_to_one_complex(probe)

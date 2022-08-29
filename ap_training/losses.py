@@ -11,11 +11,9 @@ def loss(y_true, y_pred):
     )
     l_ak = ik(ytk, ypk) + ask(ytk, ypk)
     l_ar = ir(ytr, ypr) + asr(ytr, ypr)
-    l_pk = pk(ytk, ypk)*3
+    l_pk = pk(ytk, ypk) * 3.0
     l_pr = pr(ytr, ypr)
     l_ob = obj(ytr, ypr)
-    # l_xc_p = (1 - xc_p(ytk, ypr))/2.0
-    # l_xc_a = (1 - xc_a(ytk, ypk))/2.0
     l_xc_obj = (1 - xc_obj(ytr, ypr))/2.0
 
     return l_ar + l_pr + l_ob + l_xc_obj + l_pk + l_ak
@@ -42,74 +40,8 @@ def metrics():
     return metrics
 
 @tf.function
-def log_cosh(y_true, y_pred, w=None):
-    d = y_pred - y_true
-    ls = d + tf.math.softplus(-2.0 * d) - tf.math.log(2.0)
-    if w is not None:
-        ls = ls * w
-    return ls
-
-@tf.function
 def MSE(y_true, y_pred, w=None):
     ls = (y_true - y_pred) ** 2
-    if w != None:
-        ls *= w
-    return ls
-
-@tf.function
-def MAE(y_true, y_pred, w=None):
-    ls = tf.math.abs(y_true - y_pred)
-    if w != None:
-        ls *= w
-    return ls
-
-@tf.function
-def RMSE(y_true, y_pred, w=None):
-    ls = tf.math.sqrt((y_true - y_pred) ** 2)
-    if w != None:
-        ls *= w
-    return ls
-
-@tf.function
-def rE(y_true, y_pred, msk=None, w=None):
-    ls = tf.math.divide_no_nan(tf.math.abs(y_true - y_pred),(0.5*tf.math.abs(y_true)))
-    ls = tf.math.minimum(ls, 1.0)
-    if w != None:
-        ls *= w
-    return ls
-
-@tf.function
-def sMAPE(y_true, y_pred,  w=None):
-    d =  (y_true - y_pred)
-    dn = tf.maximum(y_true, MAE(y_true, y_pred))
-    ls = tf.math.abs(tf.math.divide_no_nan(d, dn))
-    if w != None:
-        ls *= w
-    return ls
-
-@tf.function
-def sMAPE2(y_true, y_pred,  w=None):
-    d =  (y_true - y_pred)
-    if w != None:
-        d *= w
-    mae = MAE(y_true, y_pred)
-    dn = tf.maximum(y_true, mae)
-    ls = tf.math.abs(tf.math.divide_no_nan(d, dn))
-    ls *= tf.math.exp(mae)
-    return ls
-
-@tf.function
-def cauchy(y_true, y_pred, w=None):
-    ls = tf.math.log(1+tf.math.divide_no_nan((y_pred-y_true)**2,y_true**2))
-    if w != None:
-        ls *= w
-    return ls
-
-@tf.function
-def huber(y_true, y_pred, w=None):
-    x = tf.math.abs(y_pred - y_true)
-    d = 0.1
-    ls = tf.where(x <= d, 0.5 * x ** 2, 0.5 * d ** 2 + d * (x - d))
     if w != None:
         ls *= w
     return ls
@@ -169,7 +101,7 @@ def pr(y_true, y_pred, w=None):
 
 @tf.function
 def obj(y_true, y_pred, w=None):
-    ls = sMAPE(y_true["obj"], y_pred["obj"])
+    ls = MSE(y_true["obj"], y_pred["obj"])
     ls = tf.math.reduce_mean(ls, axis=[1,2],keepdims=True)
     if w != None:
         ls *= w

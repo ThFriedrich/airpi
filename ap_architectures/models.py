@@ -93,6 +93,7 @@ class CNET(tfk.Model):
         self.activation = int(prms['activation'])
         self.stack_n = prms['stack_n']
         self.global_skip = bool(prms['global_skip'])
+        self.global_cat = bool(prms['global_cat'])
         self.dropout = prms['dropout']
         self._name = "CNET_" + str(self.filters) + "_D" + str(self.depth) + \
             "_N" + str(self.normalization) + "_A" + str(self.activation)
@@ -106,9 +107,9 @@ class CNET(tfk.Model):
             filters=self.filters, kernel_size=self.kernel, dropout=self.dropout, normalization=self.normalization, activation=self.activation)
         self.Contraction_Block = []
         self.Expansion_Block = []
-        self.Amplitude_Output = Amplitude_Output_Complex(
+        self.Amplitude_Output = Amplitude_Output(
             b_skip=self.global_skip)
-        self.Phase_Output = Phase_Output_Complex(b_skip=self.global_skip)
+        self.Phase_Output = Phase_Output(b_skip=self.global_skip)
         self.Conv_Stack = Conv_Stack_Complex(
             kernel_size=self.kernel, dropout=self.dropout, normalization=self.normalization, activation=self.activation)
         for _ in range(self.depth):
@@ -121,9 +122,9 @@ class CNET(tfk.Model):
         self.Deploy_Output = Deploy_Output()
         self.Cast_Input = Cast_Input()
 
-    def build(self):
+    def build(self, bs=None):
         super().build(input_shape=(
-            None, self.x_shape[0], self.x_shape[1], self.x_shape[2]))
+            bs, self.x_shape[0], self.x_shape[1], self.x_shape[2]))
         return self
 
     def call(self, inputs):
@@ -141,13 +142,12 @@ class CNET(tfk.Model):
             x = self.Expansion_Block[i](x, skips[-(i+1)])
 
         x = self.Output_Wave(x)
-        x = x + probe
-        x_a = self.Amplitude_Output(inputs, x)
-        x_p = self.Phase_Output(inputs, x)
+        x_a = self.Amplitude_Output(inputs, tf.math.abs(x))
+        x_p = self.Phase_Output(inputs, tf.math.angle(x))
         x_o = tf.concat((x_a, x_p), -1)
 
         if self.deploy:
-            return self.Deploy_Output(x_o)
+            return self.Deploy_Output(inputs, x_o)
         else:
             return x_o
 

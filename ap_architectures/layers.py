@@ -10,7 +10,7 @@ class Amplitude_Output(kl.Layer):
 
     def __init__(self, b_skip=False, b_cat=False):
         super(Amplitude_Output, self).__init__()
-        self.scale =  tf.Variable(initial_value=0.00277, dtype=tf.float32, trainable=False)
+        self.scale =  tf.Variable(initial_value=1e-4, dtype=tf.float32, trainable=True, constraint=lambda x: tf.clip_by_value(x, 1e-6, 1))
         self.b_skip = b_skip
         self.b_cat = b_cat
         self.conv = kl.Conv2D(1, kernel_size=[3, 3], padding='same',
@@ -48,14 +48,14 @@ class Phase_Output(kl.Layer):
 
     def __init__(self, b_skip=False, b_cat=False):
         super(Phase_Output, self).__init__()
-        self.scale =  tf.Variable(initial_value=1e-6, dtype=tf.float32, trainable=True)
+        self.scale =  tf.Variable(initial_value=-1e-4, dtype=tf.float32, trainable=True, constraint=lambda x: tf.clip_by_value(x, -1e-2, 1e-2))
         self.b_skip = b_skip
         self.b_cat = b_cat
         self.conv_s = kl.Conv2D(1, kernel_size=[3, 3], padding='same',
                               strides=[1, 1], kernel_regularizer=None, activity_regularizer=None,
                               activation='linear', dtype=tf.float32)
 
-    def add_constraint(self, x_p, x0, x_s=None, x_c=None):
+    def add_constraint(self, x_p):
         xu = tf.where(x_p > tf_pi, x_p , 0)
         xl = tf.where(x_p < -tf_pi, x_p , 0)
         ls = tf.math.reduce_sum(tf.math.abs(xu)) + tf.math.reduce_sum(tf.math.abs(xl), axis=[1, 2])
@@ -75,7 +75,7 @@ class Phase_Output(kl.Layer):
             x_add = x0[...,10, tf.newaxis]
             x = kl.add([x, x_add])
 
-        self.add_constraint(x, x0)
+        self.add_constraint(x)
 
         if self.scale.trainable:
             self.add_metric(self.scale, name='phase_scale')

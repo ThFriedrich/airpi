@@ -17,7 +17,7 @@ def load_model(prms_net, X_SHAPE, bs):
     Load the UNET with given parameters and Checkpoint
     '''
 
-    if 'CNET' in prms_net['cp_path'].upper():
+    if 'C_' in prms_net['cp_path'].upper():
         from ap_architectures.models import CNET as ARCH
     else:
         from ap_architectures.models import UNET as ARCH
@@ -30,7 +30,7 @@ def load_model(prms_net, X_SHAPE, bs):
         print('Use checkpoint: ' + str(prms_net['cp_path']))
         model = ARCH(prms_net, X_SHAPE, deploy=True).build(bs)
         model.load_weights(prms_net['cp_path']+'/cp-best.ckpt')
-        model.summary()
+        # model.summary()
         return model
     else:
         warnings.warn("Warning! No Checkpoint found! The loaded model is untrained!")
@@ -80,6 +80,7 @@ class ReconstructionWorker():
         self.le_y = int(round(self.rec_prms['ny']*self.st_px.numpy())+self.cbed_size_scaled-1)
         self.le_x = int(round(self.rec_prms['nx']*self.st_px.numpy())+self.cbed_size_scaled-1)
         self.object = np.zeros((self.le_y, self.le_x), dtype='complex64')
+        self.le_half = int(self.cbed_size_scaled//2)
 
         self.beam_k = self.pad_cbed(self.rec_prms['beam_in_k'])
         self.beam_r = tf_cast_complex(self.rec_prms['beam_in_r'][...,0], self.rec_prms['beam_in_r'][...,1])
@@ -89,7 +90,7 @@ class ReconstructionWorker():
 
         
         beam_r_int = np.abs(self.beam_r)**2
-        beam_r_sc_int = np.abs(self.beam_r_scaled)
+        beam_r_sc_int = np.abs(self.beam_r_scaled)**2
         # where the beam has significant intensity
         self.idx_b = np.nonzero(beam_r_int>0.1*(np.max(beam_r_int))) 
         self.idx_b_sc = np.nonzero(beam_r_sc_int>0.1*(np.max(beam_r_sc_int))) 
@@ -237,6 +238,7 @@ class ReconstructionWorker():
 def update_obj_fig(worker, obj_fig, fig):
     le_half = int(worker.cbed_size_scaled//2)
     data = np.angle(worker.object[le_half:-(le_half),le_half:-(le_half)])
+    # data[worker.y_pos:,:] = np.core.nan
     obj_fig.set_data(data)
     obj_fig.set_clim(np.nanmin(data), np.nanmax(data))
     fig.canvas.flush_events() 
@@ -265,8 +267,6 @@ def plot_set_update(set_ax_obj, set_fig, set, pred, pos, worker):
         # order = np.flip(order)
         le_half = int(worker.cbed_size_scaled//2)
         pos = tf.cast(pos,tf.float32)
-        st_px = worker.rec_prms['step_size']/worker.rec_prms['px_size']
-        x_int, x_frac, y_int, y_frac = worker.locate(pos[:,1],pos[:,0])
         for ib, set_b in enumerate(set['cbeds']):
             if (ib+1) == len(set['cbeds']):
                 for ix, ix_s in enumerate(order):
@@ -276,9 +276,7 @@ def plot_set_update(set_ax_obj, set_fig, set, pred, pos, worker):
             
         data = pred
         obj_patch = (data[0,...]*worker.weight)
-        # obj_patch = self.shift_obj_patch(self.tf_pad_cbed(tf_fft2d(data[b,...]*worker.weight)), y_frac[0], x_frac[0])
         pred_br = tf_fft2d(obj_patch)
-        # pred_br = (worker.shift_obj_patch(worker.tf_pad_cbed(tf_fft2d(obj_patch)), y_frac[0], x_frac[0]))
 
         obj_patch = (obj_patch)
         set_ax_obj[9].set_data(np.angle(obj_patch))
@@ -304,7 +302,7 @@ def plot_set_update(set_ax_obj, set_fig, set, pred, pos, worker):
         set_fig.canvas.flush_events() 
 
 
-def retrieve_phase_from_generator(ds_class, prms_net, options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None, 'batch_size':512}, model=None, live_update=True):
+def retrieve_phase_from_generator(ds_class, prms_net, options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None, 'batch_size':32}, model=None, live_update=True):
     if 'batch_size' not in options:
         options['batch_size'] = 32
     if 'threads' not in options:

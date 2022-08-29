@@ -8,59 +8,11 @@ from cvnn.layers.core import ComplexDropout, ComplexBatchNormalization
 from cvnn import activations as ComplexActivation
 
 
-kl = tfk.layers
-
-class Amplitude_Output_Complex(tfk.layers.Layer):
-    """Layer that creates an activity sparsity regularization loss."""
-
-    def __init__(self, b_skip=True):
-        super(Amplitude_Output_Complex, self).__init__()
-        self.scale =  tf.Variable(initial_value=0.0196, dtype=tf.float32, trainable=False)
-        self.b_skip = b_skip
-
-    def call(self, x0, x, training=False):
-
-        x = tf.abs(x)
-        if training:
-            x = x * self.scale
-        else:
-            x = tf.maximum(0.0, x) * self.scale
-        
-        if training:
-            ls =  tf.math.reduce_mean(tf.maximum(tf.math.reduce_sum(x**10, axis=[1, 2])-1,0))
-            self.add_loss(ls)
-            self.add_metric(ls, name='int_constraint')
-        
-        
-        return x
-        
-
-class Phase_Output_Complex(tfk.layers.Layer):
-    """Layer that creates an activity sparsity regularization loss."""
-
-    def __init__(self, b_skip=True):
-        super(Phase_Output_Complex, self).__init__()
-        self.scale =  tf.Variable(initial_value=0.2, dtype=tf.float32, trainable=True)
-        self.b_skip = b_skip
-
-    def add_constraint(self, x_p, x0):
-        xu = tf.where(x_p > tf_pi, x_p , 0)
-        xl = tf.where(x_p < -tf_pi, x_p , 0)
-        ls = tf.math.reduce_sum(tf.math.abs(xu)) + tf.math.reduce_sum(tf.math.abs(xl))
-        self.add_loss(ls)
-        self.add_metric(ls, name='phase_constraint')
-        self.add_metric(self.scale, name='phase_scale')
+kl = tfk.layers     
 
 
-    def call(self, x0, x, training=False):
-        x = tf.math.angle(x) * self.scale
-
-        if training:
-            self.add_constraint(x, x0)
-
-        return x
 class Cast_Input(tfk.layers.Layer):
-    """Layer that creates an activity sparsity regularization loss."""
+    """Cast Input Layer (for complex inputs)"""
 
     def __init__(self):
         super(Cast_Input, self).__init__()
@@ -76,7 +28,7 @@ class Cast_Input(tfk.layers.Layer):
         return x, probe
 
 class Convolution_Block_Complex(tfk.layers.Layer):
-    """Layer implementing a sequence of 2D-Convolution, normalization and activation."""
+    """Layer implementing a sequence of complex 2D-Convolution, normalization and activation."""
 
     def __init__(self, filters=None, kernel_size=[3, 3], strides=[1, 1], padding='same', activation=2, normalization=1, dropout=None, transpose=False):
         super(Convolution_Block_Complex, self).__init__()
@@ -134,7 +86,7 @@ class Convolution_Block_Complex(tfk.layers.Layer):
 
 
 class Conv_Stack_Complex(tfk.layers.Layer):
-    """Layer implementing a sequence of 2D-Convolution, normalization and activation."""
+    """Layer implementing a sequence of complex Convolution Blocks (2D-Convolution, normalization and activation)."""
 
     def __init__(self, n_blocks=3, filters=None, kernel_size=[3, 3], strides=[1, 1], padding='same', activation=2, normalization=1, dropout=None):
         super(Conv_Stack_Complex, self).__init__()
@@ -162,7 +114,7 @@ class Conv_Stack_Complex(tfk.layers.Layer):
 
 
 class Contraction_Block_Complex(tfk.layers.Layer):
-    """Layer implementing a sequence of 2D-Convolution, normalization and activation."""
+    """Block combining a complex Convolution Stack and a `n` strided convolution layer, raising the number of filters by a factor of `n`."""
 
     def __init__(self, n_blocks=3, kernel_size=[3, 3], padding='same', activation=2, normalization=1, contraction_fct=2, dropout=None):
         super(Contraction_Block_Complex, self).__init__()
@@ -189,7 +141,7 @@ class Contraction_Block_Complex(tfk.layers.Layer):
 
 
 class Expansion_Block_Complex(tfk.layers.Layer):
-    """Layer implementing a sequence of 2D-Convolution, normalization and activation."""
+    """Block combining a complex Convolution Stack and a `n` strided transpose convolution layer, reducing the number of filters by a factor of `n`."""
 
     def __init__(self, n_blocks=3, kernel_size=[3, 3], padding='same', activation=2, normalization=1, expansion_fct=2, dropout=None):
         super(Expansion_Block_Complex, self).__init__()

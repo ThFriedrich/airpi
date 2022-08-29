@@ -80,7 +80,7 @@ class airpi_callbacks:
                 "bfm_type": 'avrg',
                 "oversample": 2.0,
                 "step":1,
-                "options":{'b_offset_correction':False, 'threads':1, 'ew_ds_path':None}
+                "options":{'b_offset_correction':False, 'threads':1, 'ew_ds_path':None, 'batch_size':64}
             }, {
                 "name":"MoS2",
                 "path": self.sample_dir+"MSO/airpi_sto.h5",
@@ -95,7 +95,7 @@ class airpi_callbacks:
                 "bfm_type": 'avrg',
                 "oversample": 2.0,
                 "step":4,
-                "options":{'b_offset_correction':False, 'threads':1, 'ew_ds_path':None}
+                "options":{'b_offset_correction':False, 'threads':1, 'ew_ds_path':None, 'batch_size':64}
             }, {
                 "name":"STO",
                 "path": self.sample_dir+"STO/hole_preprocessed_cropped_2.h5",
@@ -110,7 +110,7 @@ class airpi_callbacks:
                 "bfm_type": 'avrg',
                 "oversample": 2.0,
                 "step":1,
-                "options":{'b_offset_correction':False, 'threads':1, 'ew_ds_path':None}
+                "options":{'b_offset_correction':False, 'threads':1, 'ew_ds_path':None, 'batch_size':64}
             }]
 
             for prm in self.rec_prms:
@@ -119,23 +119,22 @@ class airpi_callbacks:
         def run_example_ds(self,epoch):
             for prm in self.rec_prms:
                 try:
+                    opts = prm['options']
                     example_ds = airpi_dataset(
                         prm, prm['path'], prm['key'], prm['dose'], step=prm['step'], in_memory=False)
                     example_ds.ds = example_ds.ds.batch(
-                        256, drop_remainder=False).prefetch(8)
-                    steps = cast['int'](ceil(example_ds.ds_n_dat/256))
+                        opts["batch_size"], drop_remainder=False).prefetch(8)
+                    steps = cast['int'](ceil(example_ds.ds_n_dat/opts["batch_size"]))
                     t = tqdm(unit=' samples', total=example_ds.ds_n_dat,ascii=' >#')
                     worker = rf.ReconstructionWorker(
-                        256, example_ds.rec_prms, options=prm['options'])
+                        64, example_ds.rec_prms, options=prm['options'])
                     ds_iter = iter(example_ds.ds)
                     for _ in range(steps):
                         set = next(ds_iter)
-                        # set['cbeds'] = image.resize(set['cbeds'], [64, 64])
                         pred = self.model.predict_on_batch(set['cbeds'])
                         pred = self.deploy_out(set['cbeds'], pred)
                         worker.update_patch(pred, set['pos'])
                         t.update(pred.shape[0])
-                    # worker.ThreadPool.shutdown(True)
                     le_half = int(worker.cbed_size_scaled//2)
                     obj = angle(
                         worker.object[le_half:-le_half, le_half:-le_half])

@@ -89,7 +89,7 @@ if __name__ == '__main__':
     from ap_training.callbacks import airpi_callbacks
     if prms_net['arch'] == 'UNET':
         from ap_architectures.models import UNET as NET
-    elif prms_net['arch'] == 'COMPLEX':
+    elif prms_net['arch'] == 'CNET':
         from ap_architectures.models import CNET as NET
     
     tf_config.run_functions_eagerly(debugger_is_active())
