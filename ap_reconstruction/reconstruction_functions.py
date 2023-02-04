@@ -53,12 +53,22 @@ class ReconstructionWorker():
                                 maxshape=(None, None, int(self.rec_prms['cbed_size']), int(self.rec_prms['cbed_size'])), 
                                 dtype='complex64')
         self.create_obj(self.rec_prms['cbed_size'])  
+        self.create_phase_ramp_lib(self.rec_prms['cbed_size'])
         self.__lock__ = Lock()
         if options['threads'] > 1:
             self.__multithreading__ = True
             self.ThreadPool = ThreadPoolExecutor(options['threads'])
         else:
             self.__multithreading__ = False
+
+    @tf.function(jit_compile=True)
+    def make_phase_ramp_lib(self, cbed_size):
+        self.phase_ramp_lib = tf.zeros((2,10,cbed_size,cbed_size))
+        for shift in range(10):
+            self.phase_ramp_lib[0,shift] = \
+                self.fcn_beam_shift_px(shift, 0) # shift y
+            self.phase_ramp_lib[1,shift] = \
+                self.fcn_beam_shift_px(0, shift-0.5) # shift x
 
     def create_obj(self, cbed_size):
         self.rec_prms["space_size"] = cbed_size/(2*self.rec_prms["gmax"])
@@ -133,13 +143,12 @@ class ReconstructionWorker():
 
     @tf.function(jit_compile=True)
     def locate(self, x, y):
-        xx = (x-1)*self.st_px
-        yy = (y-1)*self.st_px
-
-        x_int = tf.math.floor(xx)
-        x_frac = -tf.cast(xx-x_int,tf.complex64)
-        y_int = tf.math.floor(yy)
-        y_frac = -tf.cast(yy-y_int,tf.complex64)
+        xx = tf.math.round((x-1)*self.st_px*10.0)
+        yy = tf.math.round((y-1)*self.st_px*10.0)
+        x_int = tf.math.floor(xx/10.0)
+        x_frac = tf.cast(xx % 10,tf.int8)
+        y_int = tf.math.floor(yy/10.0)
+        y_frac = tf.cast(yy % 10,tf.int8)
         return x_int, x_frac, y_int, y_frac
 
     def translate_idx(self):
@@ -149,11 +158,14 @@ class ReconstructionWorker():
 
     @tf.function(jit_compile=True)
     def fcn_beam_shift_px(self, y, x):
-        xlin = tf.math.exp(self.rg*x)
-        ylin = tf.math.exp(self.rg*y)
+        y = tf.cast(y,tf.complex64)
+        x = tf.cast(x,tf.complex64)
+        xlin = tf.math.exp(-self.rg*x)
+        ylin = tf.math.exp(-self.rg*y)
         X,Y = tf.meshgrid(xlin, ylin)
         phase = X*Y
-        return phase/phase[self.cbed_center, self.cbed_center]
+        center = phase.shape[0]//2
+        return phase/phase[center, center]
 
     @tf.function(jit_compile=True)
     def scale_output(self, wave):
@@ -179,7 +191,10 @@ class ReconstructionWorker():
 
     @tf.function(jit_compile=True)
     def shift_obj_patch(self, obj, y_frac, x_frac):
-        phase_ramp = self.fcn_beam_shift_px(y_frac, x_frac)
+        phase_ramp = \
+            self.phase_ramp_lib[0,y_frac] + \
+            self.phase_ramp_lib[0,x_frac]
+        # phase_ramp = self.fcn_beam_shift_px(y_frac, x_frac)
         obj = tf_ifft2d(obj * phase_ramp)
         obj = tf.gather_nd(obj,self.idx_b_sc_tf)
         return obj
@@ -190,7 +205,8 @@ class ReconstructionWorker():
         x_int, x_frac, y_int, y_frac = self.locate(yxb[:,1],yxb[:,0])
     
         for b in range(data.shape[0]):
-            obj_patch = self.shift_obj_patch(self.tf_pad_cbed(tf_fft2d(data[b,...]*self.weight)), y_frac[b], x_frac[b])
+            # obj_patch = self.shift_obj_patch(self.tf_pad_cbed(tf_fft2d(data[b,...]*self.weight)), y_frac[b], x_frac[b])
+            obj_patch = self.tf_pad_cbed(self.shift_obj_patch(tf_fft2d(data[b,...]*self.weight), y_frac[b], x_frac[b]))
             self.update_obj(obj_patch.numpy(), [y_int[b], x_int[b]])
 
             if self.ds_ews is not None:
