@@ -28,10 +28,9 @@ def load_model(prms_net, X_SHAPE, bs, probe):
 
     if os.path.isfile(os.path.join(prms_net['cp_path'], 'checkpoint')):
         print('Use checkpoint: ' + str(prms_net['cp_path']))
-        model = ARCH(prms_net, X_SHAPE, deploy=True).build(bs)
-        # model.build(probe,bs)
+        model = ARCH(prms_net, X_SHAPE, deploy=True, bs=bs, probe=probe).build(bs)
         model.load_weights(prms_net['cp_path']+'/cp-best.ckpt')
-        # model.summary()
+        model.summary()
         return model
     else:
         warnings.warn("Warning! No Checkpoint found! The loaded model is untrained!")
@@ -39,7 +38,7 @@ def load_model(prms_net, X_SHAPE, bs, probe):
 
 class ReconstructionWorker():
     """Custom callback to write NN-output to disk asynchronously"""
-    def __init__(self, cbed_size, rec_prms, options={'b_offset_correction':False}):
+    def __init__(self, rec_prms, options={'b_offset_correction':False}):
         self.ds_ews = options['ew_ds_path']
         self.rec_prms = rec_prms
         self.y_pos = 0
@@ -49,11 +48,11 @@ class ReconstructionWorker():
         if self.ds_ews is not None:
             self.hf_write = h5py.File(self.ds_ews, 'w')
             self.ds_write =     self.hf_write.create_dataset('ds', 
-                                shape=(1, 1, int(cbed_size), int(cbed_size)), 
-                                chunks = (1,1,int(cbed_size),int(cbed_size)), 
-                                maxshape=(None, None, int(cbed_size), int(cbed_size)), 
+                                shape=(1, 1, int(self.rec_prms['cbed_size']), int(self.rec_prms['cbed_size'])), 
+                                chunks = (1,1,int(self.rec_prms['cbed_size']),int(self.rec_prms['cbed_size'])), 
+                                maxshape=(None, None, int(self.rec_prms['cbed_size']), int(self.rec_prms['cbed_size'])), 
                                 dtype='complex64')
-        self.create_obj(cbed_size)  
+        self.create_obj(self.rec_prms['cbed_size'])  
         self.__lock__ = Lock()
         if options['threads'] > 1:
             self.__multithreading__ = True
@@ -271,7 +270,7 @@ def plot_set_update(set_ax_obj, set_fig, set, pred, pos, worker, x_o):
         for ib, set_b in enumerate(set['cbeds']):
             if (ib+1) == len(set['cbeds']):
                 for ix, ix_s in enumerate(order):
-                    data = set_b[...,ix]**0.1
+                    data = np.cast[np.float32](set_b[...,ix])**0.1
                     set_ax_obj[ix_s].set_data(data)
                     set_ax_obj[ix_s].set_clim(np.min(data), np.max(data))
             
@@ -313,14 +312,14 @@ def retrieve_phase_from_generator(ds_class, prms_net, options={'b_offset_correct
         options['ew_ds_path'] = None
     
     steps= np.cast[np.int32](np.ceil(ds_class.ds_n_dat/options['batch_size']))
-    worker = ReconstructionWorker(64, ds_class.rec_prms, options)
+    worker = ReconstructionWorker(ds_class.rec_prms, options)
     le_half = int(worker.cbed_size_scaled//2)
 
     if live_update:
         plt.ion()
         fig, ax = plt.subplots()
         obj_fig = ax.imshow(np.angle(worker.object[le_half:-le_half,le_half:-le_half]),vmin=-pi, vmax=pi, cmap=parula)
-        # set_fig, set_ax = plot_set_init(worker)
+        set_fig, set_ax = plot_set_init(worker)
 
     if model is None:
         model = load_model(prms_net, ds_class.ds._flat_shapes[0], options['batch_size'],ds_class.rec_prms['beam_in_r'])
@@ -328,18 +327,20 @@ def retrieve_phase_from_generator(ds_class, prms_net, options={'b_offset_correct
     ds_iter = iter(ds_class.ds.batch(options['batch_size'], drop_remainder=False).prefetch(8))
     
     t= tqdm(unit=' samples', total=ds_class.ds_n_dat)
-    set = next(ds_iter)
-    # set['cbeds'] = np.cast['uint8'](set['cbeds'])
+    upd_tic = time.time()
     for _ in range(steps):
         set = next(ds_iter)
-        pred = model.predict_on_batch(set['cbeds'])
+        pred, x_o = model.predict_on_batch(set['cbeds'])
         if worker.__multithreading__:
             worker.ThreadPool.submit(worker.update_patch, pred, set['pos'])
         else:
             worker.update_patch(pred, set['pos'])
         if live_update: 
-            update_obj_fig(worker, obj_fig, fig)
-            # plot_set_update(set_ax, set_fig, set, pred, set['pos'], worker, x_o)
+            tic = time.time()
+            if tic - upd_tic > 1:
+                update_obj_fig(worker, obj_fig, fig)
+                upd_tic = tic
+                plot_set_update(set_ax, set_fig, set, pred, set['pos'], worker, x_o)
         t.update(pred.shape[0])
        
     if worker.__multithreading__:
