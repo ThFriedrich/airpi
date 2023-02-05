@@ -194,7 +194,7 @@ class ReconstructionWorker():
     def shift_obj_patch(self, obj, y_frac, x_frac):
         phase_ramp = \
             self.phase_ramp_lib[0,y_frac] + \
-            self.phase_ramp_lib[0,x_frac]
+            self.phase_ramp_lib[1,x_frac]
         # phase_ramp = self.fcn_beam_shift_px(y_frac, x_frac)
         obj = tf_ifft2d(obj * phase_ramp)
         obj = tf.gather_nd(obj,self.idx_b_sc_tf)
