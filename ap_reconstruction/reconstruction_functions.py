@@ -69,9 +69,9 @@ class ReconstructionWorker():
             self.phase_ramp_lib[0,shift] = \
                 self.fcn_beam_shift_px(shift, 0) # shift y
             self.phase_ramp_lib[1,shift] = \
-                self.fcn_beam_shift_px(0, shift-0.5) # shift x
+                self.fcn_beam_shift_px(0, shift) # shift x
 
-    def create_obj(self, cbed_size):
+    def create_obj(self, cbed_size): # I think this function need some serious documentation
         self.rec_prms["space_size"] = cbed_size/(2*self.rec_prms["gmax"])
         self.rec_prms["scale"] = self.rec_prms["oversample"]*self.rec_prms["space_size"]/cbed_size/self.rec_prms["step_size"]
 
@@ -83,7 +83,7 @@ class ReconstructionWorker():
         self.rec_prms["px_size"] = self.rec_prms["space_size"]/self.cbed_size_scaled
         gmax_s = tf.cast(self.cbed_size_scaled/(2*self.rec_prms["space_size"]),tf.float32)
 
-        self.rg = tf.cast(np.arange(int(self.cbed_size_scaled))*2.0*np.pi*1j/self.cbed_size_scaled, tf.complex64)
+        self.rg = tf.cast(np.arange(int(cbed_size))*2.0*np.pi*1j/self.cbed_size_scaled, tf.complex64) # ramp size: cbed_size, ramp scale: cbed_size_scaled
         self.st_px = tf.cast(self.rec_prms['step_size']/self.rec_prms['px_size'],tf.float32)
         self.t = np.zeros((int(self.cbed_size_scaled), int(self.cbed_size_scaled)))
         self.cbed_center = int(np.ceil((self.cbed_size_scaled+1)/2))-1
