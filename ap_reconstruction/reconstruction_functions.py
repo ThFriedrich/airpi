@@ -54,7 +54,7 @@ class ReconstructionWorker():
                                 maxshape=(None, None, int(cbed_size), int(cbed_size)), 
                                 dtype='complex64')
         self.create_obj(cbed_size)  
-        self.create_phase_ramp_lib(cbed_size)
+        self.create_phase_ramp_lib()
         self.__lock__ = Lock()
         if options['threads'] > 1:
             self.__multithreading__ = True
@@ -64,12 +64,15 @@ class ReconstructionWorker():
 
     @tf.function(jit_compile=True)
     def create_phase_ramp_lib(self):
-        phase_ramp_lib = tf.TensorArray(tf.complex64,size=10)
+        self.phase_ramp_lib_y = tf.TensorArray(tf.complex64,size=10)
+        self.phase_ramp_lib_x = tf.TensorArray(tf.complex64,size=10)
         for shift in range(10):
-            phase_ramp_y = self.fcn_beam_shift_px(shift, 0) # shift y
-            phase_ramp_x = self.fcn_beam_shift_px(0, shift-0.5) # shift x
-            phase_ramp_lib = phase_ramp_lib.write(shift,tf.stack((phase_ramp_y,phase_ramp_x)))
-        return phase_ramp_lib.stack()
+            self.phase_ramp_lib_y = self.phase_ramp_lib_y.write(
+                self.fcn_beam_shift_px(shift, 0)) # shift y
+            self.phase_ramp_lib_x = self.phase_ramp_lib_x.write(
+                self.fcn_beam_shift_px(0, shift-0.5)) # shift x
+        self.phase_ramp_lib_y = self.phase_ramp_lib_y.stack()
+        self.phase_ramp_lib_x = self.phase_ramp_lib_x.stack()
 
     def create_obj(self, cbed_size): # I think this function need some serious documentation
         self.rec_prms["space_size"] = cbed_size/(2*self.rec_prms["gmax"])
@@ -138,19 +141,6 @@ class ReconstructionWorker():
         else:
             cbed_out = cbed_in
         return cbed_out
-
-    @tf.function(jit_compile=True)
-    def tf_pad_cbed_ifft(self, cbed_in):
-        nx_in = int(cbed_in.shape[1])
-        nx_out = int(self.cbed_size_scaled)
-        b_even = int(nx_out % 2 != 0)
-        nx = floor((nx_out-nx_in)/2)
-        pads = [nx, nx+b_even, nx, nx+b_even]
-        if nx_out/nx_in > 1:
-            cbed_out = tf_pad2d(cbed_in, pads)
-        else:
-            cbed_out = cbed_in
-        return tf_ifft2d(cbed_out)
 
     def find_center(self, nx):
         return np.ceil((nx + 1) / 2)
@@ -225,11 +215,13 @@ class ReconstructionWorker():
         yxb = tf.cast(yx,tf.float32)
         x_int, x_frac, y_int, y_frac = self.locate(yxb[:,1],yxb[:,0])
 
-        phase_ramp_stack = self.create_phase_ramp_stack(y_frac, x_frac)
-        obj_patch = self.tf_pad_cbed_ifft( tf_fft2d(data[b,...]*self.weight) * phase_ramp_stack )
+        phase_ramp_stack_y = tf.gather_nd(self.phase_ramp_lib_y, indices=[y_frac])
+        phase_ramp_stack_x = tf.gather_nd(self.phase_ramp_lib_x, indices=[x_frac])
+        obj_patch = tf_ifft2d(
+            self.tf_pad_cbed_ifft( tf_fft2d(data[b,...]*self.weight) * phase_ramp_stack_y * phase_ramp_stack_x )
+            )
     
         for b in range(data.shape[0]):
-            obj_patch = self.tf_pad_cbed(self.shift_obj_patch(tf_fft2d(data[b,...]*self.weight), y_frac[b], x_frac[b]))
             self.update_obj(obj_patch.numpy(), [y_int[b], x_int[b]])
 
             if self.ds_ews is not None:
