@@ -65,6 +65,7 @@ if __name__ == "__main__":
             "aberrations": [-1, 0.001],
             "probe_estimation_method": args["ap_fcn"],
             "oversample": 2.0,
+            "b_resize":True
         }
         options={'threads':1, 'batch_size':256}
     
@@ -149,6 +150,7 @@ if __name__ == "__main__":
             "aberrations": [14.0312, 1e-3],
             "probe_estimation_method": args["ap_fcn"],
             "oversample": 1.0,
+            "b_resize":True
         }
         options={'threads':1, 'ew_ds_path':None}
 
@@ -200,6 +202,7 @@ if __name__ == "__main__":
             "aberrations": [-1, 1e-3],
             "probe_estimation_method": args["ap_fcn"],
             "oversample": 2.0,
+            "b_resize":True
         }
         options={'threads':1, 'batch_size':256}
 
@@ -216,6 +219,7 @@ if __name__ == "__main__":
             "aberrations": [-1, 1e-3],
             "probe_estimation_method": args["ap_fcn"],
             "oversample": 2.0,
+            "b_resize":True
         }
         options={'threads':1, 'batch_size':256}
 
@@ -232,6 +236,7 @@ if __name__ == "__main__":
             "aberrations": [-1, 1.0],
             "probe_estimation_method": args["ap_fcn"],
             "oversample": 1,
+            "b_resize":True
         }
         options={'threads':1, 'batch_size':256}
 
@@ -249,6 +254,7 @@ if __name__ == "__main__":
             "aberrations": [-1, 1e-3],
             "probe_estimation_method": args["ap_fcn"],
             "oversample": 2.0,
+            "b_resize":True
         }
         options={'threads':1, 'batch_size':256}
     

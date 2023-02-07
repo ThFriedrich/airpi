@@ -2,15 +2,13 @@ import time
 import numpy as np
 from math import ceil, floor, pi
 import os
-import h5py
 import matplotlib.pyplot as plt
 import tensorflow as tf
 import warnings
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from ap_utils.colormaps import parula
-from ap_utils.functions import tf_cast_complex, tf_complex_interpolation, tf_fft2d, tf_ifft2d, tf_normalise_to_one_complex, tf_pad2d, tf_probe_function
+from ap_utils.functions import tf_cast_complex, tf_fft2d, tf_ifft2d, tf_normalise_to_one_complex, tf_pad2d, tf_probe_function
 from ap_utils.BoundedThreadpool import BoundedExecutor
 
 def load_model(prms_net, X_SHAPE, bs, probe):
@@ -49,7 +47,7 @@ class ReconstructionWorker():
         self.ThreadPool = BoundedExecutor(16, options['threads'])
 
 
-    def create_obj(self, cbed_size):
+    def create_obj(self, cbed_size): # I think this function need some serious documentation
         self.rec_prms["space_size"] = cbed_size/(2*self.rec_prms["gmax"])
         self.rec_prms["scale"] = self.rec_prms["oversample"]*self.rec_prms["space_size"]/cbed_size/self.rec_prms["step_size"]
 
@@ -61,7 +59,6 @@ class ReconstructionWorker():
         self.rec_prms["px_size"] = self.rec_prms["space_size"]/self.cbed_size_scaled
         gmax_s = tf.cast(self.cbed_size_scaled/(2*self.rec_prms["space_size"]),tf.float32)
 
-        # self.rg = tf.cast(np.arange(int(self.cbed_size_scaled))*2.0*np.pi*1j/self.cbed_size_scaled, tf.complex64)
         self.rg = tf.cast(np.arange(int(cbed_size))*2.0*np.pi*1j/self.cbed_size_scaled, tf.complex64)
         self.st_px = tf.cast(self.rec_prms['step_size']/self.rec_prms['px_size'],tf.float32)
         self.cbed_center = int(np.ceil((self.cbed_size_scaled+1)/2))-1
@@ -180,7 +177,6 @@ class ReconstructionWorker():
 def update_obj_fig(worker, obj_fig, fig):
     le_half = int(worker.cbed_size_scaled//2)
     data = np.angle(worker.object[le_half:-(le_half),le_half:-(le_half)])
-    # data[worker.y_pos:,:] = np.core.nan
     obj_fig.set_data(data)
     obj_fig.set_clim(np.nanmin(data), np.nanmax(data))
     fig.canvas.flush_events() 
