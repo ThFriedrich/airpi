@@ -1,5 +1,5 @@
 # Note: You can use any Debian/Ubuntu based image you want. 
-FROM tensorflow/tensorflow:2.9.0-gpu
+FROM tensorflow/tensorflow:2.11.0-gpu
 
 # [Option] Install zsh
 ARG INSTALL_ZSH="true"
