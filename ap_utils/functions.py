@@ -72,7 +72,7 @@ def ifft2d(x):
     return fftshift(ifft2(ifftshift(x)))*nx
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_fft2d(x):
     """2D Fourier Transform using tensorflow"""
     nx = tf.cast(tf.shape(x)[1],x.dtype)
@@ -511,7 +511,7 @@ def tf_com(images):
     return com, offset
 
 
-@tf.function
+@tf.function(jit_compile=True)
 def tf_pad2d(x: tf.Tensor, pad):
     """
     Adds zero-padding to a 2D or 3D tensor.

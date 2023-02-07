@@ -73,14 +73,15 @@ class airpi_callbacks:
                 "dose":None,
                 "E0": 200.0,
                 "apeture": 25,
+                # "gmax": 2.4537504,
                 "gmax": 2.5,
                 "cbed_size": 128,
+                "b_add_probe": True,
                 "step_size": 0.2,
                 "aberrations": [-1, 1e-3],
-                "bfm_type": 'avrg',
+                "probe_estimation_method": 'gene',
                 "oversample": 2.0,
-                "step":1,
-                "options":{'b_offset_correction':False, 'threads':1, 'ew_ds_path':None, 'batch_size':64}
+                "skip":1,
             }, {
                 "name":"MoS2",
                 "path": self.sample_dir+"MSO/airpi_sto.h5",
@@ -89,13 +90,14 @@ class airpi_callbacks:
                 "E0": 300.0,
                 "apeture": 20.0,
                 "gmax": 4.5714,
+                # "gmax": 4.3343925,
                 "cbed_size": 128,
+                "b_add_probe": True,
                 "step_size": 0.05,
                 "aberrations": [-1, 1e-3],
-                "bfm_type": 'avrg',
+                "probe_estimation_method": 'gene',
                 "oversample": 2.0,
-                "step":4,
-                "options":{'b_offset_correction':False, 'threads':1, 'ew_ds_path':None, 'batch_size':64}
+                "skip":4,
             }, {
                 "name":"STO",
                 "path": self.sample_dir+"STO/hole_preprocessed_cropped_2.h5",
@@ -104,36 +106,36 @@ class airpi_callbacks:
                 "E0": 300.0,
                 "apeture": 20.0,
                 "gmax": 1.6671,
+                # "gmax": 1.6253971,
                 "cbed_size": 64,
+                "b_add_probe": True,
                 "step_size": 0.1818,
                 "aberrations": [-1, 1e-3],
-                "bfm_type": 'avrg',
+                "probe_estimation_method": 'gene',
                 "oversample": 2.0,
-                "step":1,
-                "options":{'b_offset_correction':False, 'threads':1, 'ew_ds_path':None, 'batch_size':64}
+                "skip":1,
             }]
 
             for prm in self.rec_prms:
-                prm['step_size'] *= prm['step']
+                prm['step_size'] *= prm['skip']
 
         def run_example_ds(self,epoch):
             for prm in self.rec_prms:
                 try:
-                    opts = prm['options']
                     example_ds = airpi_dataset(
-                        prm, prm['path'], prm['key'], prm['dose'], step=prm['step'], in_memory=False)
+                        prm, prm['path'], prm['key'], prm['dose'], skip=prm['skip'])
                     example_ds.ds = example_ds.ds.batch(
-                        opts["batch_size"], drop_remainder=False).prefetch(8)
-                    steps = cast['int'](ceil(example_ds.ds_n_dat/opts["batch_size"]))
+                       128, drop_remainder=False).prefetch(8)
+                    steps = cast['int'](ceil(example_ds.ds_n_dat/128))
                     t = tqdm(unit=' samples', total=example_ds.ds_n_dat,ascii=' >#')
-                    worker = rf.ReconstructionWorker(
-                        64, example_ds.rec_prms, options=prm['options'])
+                    worker = rf.ReconstructionWorker(example_ds.rec_prms)
                     ds_iter = iter(example_ds.ds)
                     for _ in range(steps):
                         set = next(ds_iter)
                         pred = self.model.predict_on_batch(set['cbeds'])
                         pred = self.deploy_out(set['cbeds'], pred)
-                        worker.update_patch(pred, set['pos'])
+                        worker.ThreadPool.submit(worker.update_patch, pred, set['pos'])
+                        # worker.update_patch(pred, set['pos'])
                         t.update(pred.shape[0])
                     le_half = int(worker.cbed_size_scaled//2)
                     obj = angle(
@@ -141,10 +143,10 @@ class airpi_callbacks:
                     t.close()
                     im = fcn_plot_example(obj, epoch, prm["name"])
                     summary.image(name=prm["name"], data=im,
-                              step=epoch, max_outputs=256)
+                                step=epoch, max_outputs=256)
                     del(worker, ds_iter, set, pred, t, im, obj, le_half, steps, example_ds)
-                except:
-                    pass
+                except Exception as e: 
+                    print(e)
                 gc.collect()
 
         def fcn_xy_image_gen(self, pred, epoch):

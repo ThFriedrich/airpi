@@ -8,27 +8,28 @@ from tensorflow_addons.layers import InstanceNormalization, GroupNormalization
 class Amplitude_Output(kl.Layer):
     """Amplitude Output Layer"""
 
-    def __init__(self, b_skip=False, b_cat=False):
+    def __init__(self, b_skip=False, b_cat=False, beam=None):
         super(Amplitude_Output, self).__init__()
         self.scale =  tf.Variable(initial_value=1e-4, dtype=tf.float32, trainable=True, constraint=lambda x: tf.clip_by_value(x, 1e-6, 1))
         self.b_skip = b_skip
         self.b_cat = b_cat
+        self.beam = beam
+        if beam is not None:
+            self.beam = beam[...,tf.newaxis]
         self.conv = kl.Conv2D(1, kernel_size=[3, 3], padding='same',
                               strides=[1, 1], kernel_regularizer=None, activity_regularizer=None,
                               activation='linear', dtype=tf.float32)
 
-    def call(self, x0, x, training=False):
-
+    def call(self, x, beam, training=False):
         if self.b_cat:
-            beam = (x0[...,9, tf.newaxis])**0.2
-            x = tf.concat([x, beam], axis=-1)
+            if beam is not None:
+                x = tf.concat([x, beam[...,tf.newaxis]**0.2], axis=-1)
 
         x = self.conv(x) * self.scale
-        
 
         if self.b_skip:
-            x_add = (x0[...,9, tf.newaxis])**0.2
-            x = kl.add([x, x_add])
+            if beam is not None:
+                x = kl.add([x, beam[...,tf.newaxis]**0.2])
 
             
         if training:
@@ -46,11 +47,14 @@ class Amplitude_Output(kl.Layer):
 class Phase_Output(kl.Layer):
     """Phase Output Layer"""
 
-    def __init__(self, b_skip=False, b_cat=False):
+    def __init__(self, b_skip=False, b_cat=False, beam=None):
         super(Phase_Output, self).__init__()
         self.scale =  tf.Variable(initial_value=-1e-4, dtype=tf.float32, trainable=True, constraint=lambda x: tf.clip_by_value(x, -1e-2, 1e-2))
         self.b_skip = b_skip
         self.b_cat = b_cat
+        self.beam = beam
+        if beam is not None:
+            self.beam = beam[...,tf.newaxis]
         self.conv_s = kl.Conv2D(1, kernel_size=[3, 3], padding='same',
                               strides=[1, 1], kernel_regularizer=None, activity_regularizer=None,
                               activation='linear', dtype=tf.float32)
@@ -63,17 +67,16 @@ class Phase_Output(kl.Layer):
         self.add_loss(ls)
         self.add_metric(ls, name='phase_regularization')
 
-    def call(self, x0, x, training=False):
-
+    def call(self, x, beam=None, training=False):
         if self.b_cat:
-            x_add = x0[...,10, tf.newaxis]
-            x = tf.concat([x, x_add], axis=-1)
+            if beam is not None:
+                x = tf.concat([x, beam[...,tf.newaxis]], axis=-1)
 
         x = self.conv_s(x) * self.scale
 
         if self.b_skip:
-            x_add = x0[...,10, tf.newaxis]
-            x = kl.add([x, x_add])
+            if beam is not None:
+                x = kl.add([x, beam[...,tf.newaxis]])
 
         self.add_constraint(x)
 
@@ -91,18 +94,14 @@ class Deploy_Output(kl.Layer):
     def cast_complex(self, amp, phase):
         return tf.cast(amp, tf.complex64) * tf.math.exp(tf.cast(phase, tf.complex64) * 1j)
 
-    def cast(self, x0, x):
-        x_a = tf.cast(x[...,0]**5, tf.complex64)
-        x_p = tf.cast(x[...,1], tf.complex64)
-        x_o = tf.squeeze((x_a * tf.exp(1j*x_p)))
-        x_i = self.cast_complex(x0[..., -2], x0[..., -1])
+    def cast(self, x, probe):
+        x_o = self.cast_complex(x[...,0]**5,x[...,1])
+        x_i = self.cast_complex(probe[..., -2], probe[..., -1])
         obj = x_o/x_i
-        obj = tf.cast(tf.math.exp(tf.cast(tf.math.angle(obj),tf.complex64)*1j),tf.complex64)
-        # obj = tf_fft2d(obj)
         return obj
     
-    def call(self, x0, x):
-        return self.cast(x0, x)
+    def call(self, x, probe):
+        return self.cast(x, probe)
 
 class Standardization_Layer(kl.Layer):
     """Standardization layer. Normalizes the input tensor to have zero mean and unit variance"""
@@ -130,6 +129,34 @@ class Standardization_Layer(kl.Layer):
             msk_p = self.standardize(x[...,10, tf.newaxis])
             xf = tf.concat((xf, msk_p), -1)
         return xf
+
+    def call(self, x):
+        return self.x_normalise(x)
+
+class Standardization_Layer_Deployed(kl.Layer):
+    """Standardization layer. Normalizes the input tensor to have zero mean and unit variance"""
+
+    def __init__(self, probe, bs):
+        super(Standardization_Layer_Deployed, self).__init__()
+        probe_a = self.standardize(tf.tile(probe[tf.newaxis,..., 0,tf.newaxis],[bs,1,1,1]))
+        probe_p = self.standardize(tf.tile(probe[tf.newaxis,..., 1,tf.newaxis],[bs,1,1,1]))
+        self.probe = tf.concat((probe_a, probe_p), -1)
+
+    def standardize(self, x: tf.Tensor, ax=[1,2,3]) -> tf.Tensor:
+        x_mean, x_var = tf.nn.moments(x, axes=ax, keepdims=True)
+        x_std = tf.maximum(tf.sqrt(x_var), 1e-8)
+        x = tf.divide(tf.subtract(x, x_mean), x_std)
+        return x
+   
+    def flatten(self, x: tf.Tensor) -> tf.Tensor:
+        return x**0.1
+
+    def x_normalise(self, x: tf.Tensor) -> tf.Tensor:
+        bs = tf.shape(x)[0]
+        x = self.flatten(x)
+        x = self.standardize(x,[1,2,3])
+        x = tf.concat((x, self.probe[:bs,...]),-1)
+        return x
 
     def call(self, x):
         return self.x_normalise(x)
@@ -253,7 +280,7 @@ class Convolution_Block(kl.Layer):
     def call(self, x, training=False):
         x = self.conv2d(x)
         if self.normalization_layer is not None:
-            x = self.normalization_layer(x, training)
+            x = self.normalization_layer(x)
         if self.activation_layer is not None:
             x = self.activation_layer(x)
         if self.dropout_layer is not None:

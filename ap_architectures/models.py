@@ -6,7 +6,7 @@ if tuple(map(int, tf.__version__.split('.'))) >= (2,9,0):
 
 
 class UNET(tfk.Model):
-    def __init__(self, prms, input_shape, deploy=False, **kwargs):
+    def __init__(self, prms, input_shape, deploy=False, probe=None, bs=None, **kwargs):
         super(UNET, self).__init__(**kwargs)
         self.x_shape = input_shape
         self.type = prms['type']
@@ -20,6 +20,7 @@ class UNET(tfk.Model):
         self.global_cat = bool(prms['global_cat'])
         self._name = "UNET_" + str(self.filters) + "_D" + str(self.depth) + \
             "_N" + str(self.normalization) + "_A" + str(self.activation)
+        self.probe = probe
 
         # Regularization parameters
         if prms['w_regul'] != None:
@@ -32,24 +33,36 @@ class UNET(tfk.Model):
             self.a_regul = None
         self.dropout = prms['dropout']
         self.deploy = deploy
-        # Initialization
-        self.kernel_initializer = tfk.initializers.HeNormal(seed=1310)
+
         self.Input = kl.Input(
             shape=(self.x_shape[0], self.x_shape[1], self.x_shape[2]), name='cbeds')
-        self.Standardization_Layer = Standardization_Layer()
+        if deploy:
+            self.Standardization_Layer = Standardization_Layer_Deployed(probe, bs)
+            # self.Standardization_Layer = Standardization_Layer()
+            self.probe = tf.tile(probe[tf.newaxis,...],[bs,1,1,1])
+        else:
+            self.Standardization_Layer = Standardization_Layer()
+        
+        # Initialization
+        self.kernel_initializer = tfk.initializers.HeNormal(seed=1310)
+
         self.Convolution_Block = Convolution_Block(filters=self.filters, kernel_size=self.kernel, initializer=self.kernel_initializer, kernel_regularizer=self.w_regul,
                                                    activity_regularizer=self.a_regul, dropout=self.dropout, normalization=self.normalization, activation=self.activation)
         self.Contraction_Block = []
         self.Expansion_Block = []
-        self.Amplitude_Output = Amplitude_Output(b_skip=self.global_skip, b_cat=self.global_cat)
-        self.Phase_Output = Phase_Output(b_skip=self.global_skip, b_cat=self.global_cat)
         
         for _ in range(self.depth):
             self.Contraction_Block.append(Contraction_Block(initializer=self.kernel_initializer, kernel_regularizer=self.w_regul,
                                           activity_regularizer=self.a_regul, dropout=self.dropout, normalization=self.normalization, activation=self.activation))
             self.Expansion_Block.append(Expansion_Block(initializer=self.kernel_initializer, kernel_regularizer=self.w_regul,
                                         activity_regularizer=self.a_regul, dropout=self.dropout, normalization=self.normalization, activation=self.activation))
-        self.Deploy_Output = Deploy_Output()
+        if deploy:
+            self.Amplitude_Output = Amplitude_Output(b_skip=self.global_skip, b_cat=self.global_cat,beam=self.probe[...,0])
+            self.Phase_Output = Phase_Output(b_skip=self.global_skip, b_cat=self.global_cat,beam=self.probe[...,1])
+            self.Deploy_Output = Deploy_Output()
+        else:
+            self.Amplitude_Output = Amplitude_Output(b_skip=self.global_skip, b_cat=self.global_cat)
+            self.Phase_Output = Phase_Output(b_skip=self.global_skip, b_cat=self.global_cat)
 
     def build(self, bs=None):
         super().build(input_shape=(
@@ -57,10 +70,16 @@ class UNET(tfk.Model):
         return self
 
     def call(self, inputs, training=False):
+        if self.deploy:
+            bs = tf.shape(inputs)[0]
+            inputs = tf.cast(inputs,tf.float32)
+            probe = self.probe[:bs,...]
+        if self.probe is None:
+            probe = inputs[..., -2:]
 
         x = self.Standardization_Layer(inputs)
-        x = self.Convolution_Block(x)
 
+        x = self.Convolution_Block(x)
         skips = list()
         for i in range(self.depth):
             x, ct = self.Contraction_Block[i](x)
@@ -69,12 +88,13 @@ class UNET(tfk.Model):
         for i in range(self.depth):
             x = self.Expansion_Block[i](x, skips[-(i+1)])
 
-        x_a = self.Amplitude_Output(inputs, x)
-        x_p = self.Phase_Output(inputs, x)
+        x_a = self.Amplitude_Output(x,probe[...,0])
+        x_p = self.Phase_Output(x,probe[...,1])
+        
         x_o = tf.concat((x_a, x_p), -1)
 
         if self.deploy:
-            return self.Deploy_Output(inputs, x_o)
+            return self.Deploy_Output(x_o, probe)
         else:
             return x_o
 
@@ -128,7 +148,8 @@ class CNET(tfk.Model):
         return self
 
     def call(self, inputs):
-
+        if self.deploy:
+            inputs = tf.cast(inputs,tf.float32)
         x = self.Standardization_Layer(inputs)
         x, probe = self.Cast_Input(x)
         x = self.Convolution_Block(x)

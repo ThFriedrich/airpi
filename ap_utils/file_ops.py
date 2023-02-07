@@ -32,7 +32,7 @@ def get_default_prms(hp_path, log_path):
         "loss_prms_r": [1.0, 1.0, 1.0, 25.0, 2.0, 1.0, 0.1],
         "loss_prms_k":[2.0, 4.0, 2.0, 4.0, 1.0, 1.0e-3, 1.0],
         "batch_size": 32,
-        "scale_cbeds": True,
+        "scale_cbeds": False,
         "dose": [1, 7, 5]
     }
 
