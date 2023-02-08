@@ -78,7 +78,8 @@ class Phase_Output(kl.Layer):
             if beam is not None:
                 x = kl.add([x, beam[...,tf.newaxis]])
 
-        self.add_constraint(x)
+        if training:
+            self.add_constraint(x)
 
         if self.scale.trainable:
             self.add_metric(self.scale, name='phase_scale')

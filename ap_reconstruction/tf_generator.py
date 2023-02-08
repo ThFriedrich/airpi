@@ -2,11 +2,10 @@ import queue
 import numpy as np
 from threading import Thread
 from multiprocessing import Event
-import matplotlib.pyplot as plt
-from ap_training.data_fcns import fcn_weight_cbeds
-from tensorflow.data import Dataset as tf_ds
-from tensorflow.random import poisson as tf_poiss
-from tensorflow import int32, float32, squeeze, image, transpose, uint8
+# from ap_training.data_fcns import fcn_weight_cbeds
+import tensorflow as tf
+tf_poiss = tf.random.poisson
+tf_ds = tf.data.Dataset
 
 class tf_generator:
     '''Generator that keeps the HDF5-DB open and reads chunk-by-chunk'''
@@ -28,7 +27,7 @@ class tf_generator:
         self.rw = np.zeros((self.nx+2,) + (3,) + self.size_in[2:],dtype=self.d_type)
         load_dat = self.__get_row__(0)
         if self.dose is not None:
-            load_dat = squeeze(tf_poiss([1], load_dat*self.dose, seed=131087))
+            load_dat = np.squeeze(tf_poiss([1], load_dat*self.dose, seed=131087))
         self.rw[1:self.nx+1,1,...] = load_dat
         self.rw[1:self.nx+1,2,...] = load_dat
         
@@ -51,7 +50,7 @@ class tf_generator:
             self.rw = np.roll(self.rw,-1,axis=1)
             load_dat = self.__get_row__(rw_i)
             if self.dose is not None:
-                load_dat = squeeze(tf_poiss([1], load_dat*self.dose, seed=131087))
+                load_dat = np.squeeze(tf_poiss([1], load_dat*self.dose, seed=131087))
             self.rw[1:self.nx+1,2,...] = load_dat
             self.q_row.put((self.rw, rw_i))
 
@@ -101,14 +100,14 @@ class tf_generator:
         # set = fcn_weight_cbeds(set, self.step_size)
 
         if self.resize:
-            set = transpose(set,[2,0,1])
-            set = squeeze(image.resize(set[...,np.newaxis], (64,64)))
-            set = transpose(set,[1, 2, 0])
+            set = np.transpose(set,[2,0,1])
+            set = np.squeeze(tf.image.resize(set[...,np.newaxis], (64,64)))
+            set = np.transpose(set,[1, 2, 0])
 
         if self.add_probe:
             set = np.concatenate((set,self.bfm),-1)
 
-        return set 
+        return set
 
     def __call__(self):  
         while True:
@@ -131,7 +130,7 @@ def tf_generator_ds(data, size_in, prm):
      
     return tf_ds.from_generator(
         tf_generator(data, size_in, prm['probe'], prm['skip'], prm['dose'], prm['step_size'], prm['order'], prm['b_add_probe'], prm['b_resize']),
-        output_types=(  {'cbeds':data.dtype, 'pos': int32}),
+        output_types=(  {'cbeds':data.dtype, 'pos': tf.int32}),
         output_shapes=( {'cbeds': [size_out[2], size_out[3], nc], 'pos':[2,1]} ) 
         )
 

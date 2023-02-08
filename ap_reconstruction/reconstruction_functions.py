@@ -116,7 +116,6 @@ class ReconstructionWorker():
         tt[0:int(self.cbed_size_scaled),0:int(self.cbed_size_scaled)] = self.t
         return np.nonzero(tt == 1)
 
-    @tf.function(jit_compile=True)
     def create_phase_ramp_lib(self):
         phase_ramp_lib_y = tf.TensorArray(tf.complex64,size=10)
         phase_ramp_lib_x = tf.TensorArray(tf.complex64,size=10)
@@ -127,7 +126,6 @@ class ReconstructionWorker():
                 self.fcn_beam_shift_px(0, shift)) # shift x
         return phase_ramp_lib_y.stack(), phase_ramp_lib_x.stack()
 
-    @tf.function(jit_compile=True)
     def fcn_beam_shift_px(self, y, x):
         y = tf.cast(y*0.1,tf.complex64)
         x = tf.cast(x*0.1,tf.complex64)
@@ -238,7 +236,10 @@ def plot_set_update(set_ax_obj, set_fig, set, pred, pos, worker, x_o):
         set_fig.canvas.flush_events() 
 
 
-def retrieve_phase_from_generator(ds_class, prms_net, options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None, 'batch_size':32}, model=None, live_update=True):
+def retrieve_phase_from_generator(ds_class, prms_net=None, options={'b_offset_correction':False, 'threads':1, 'ew_ds_path':None, 'batch_size':32}, model=None, live_update=True):
+    if all(item is None for item in [prms_net, model]):
+        raise ValueError("Either model parameters 'prms_net' or a loaded model 'model' must be provided. Both are received None")
+
     if 'batch_size' not in options:
         options['batch_size'] = 256
     if 'threads' not in options:
