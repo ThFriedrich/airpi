@@ -55,7 +55,8 @@ RUN pip install silence_tensorflow
 RUN pip install nvidia-ml-py3
 RUN pip install tqdm
 RUN pip install autopep8
-RUN pip install cvnn[full]
+RUN pip install tensorflow_probability==0.19.0
+RUN pip install cvnn[full]==2.0
 
 # Preserve command history
 RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
