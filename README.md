@@ -6,6 +6,7 @@ The code for the training data generation may be found [here](https://github.com
 
 ## What does AIRPI do?
 The process can be divided into two main steps. First, the complex electron wave function is recovered for a convergent beam electron diffraction pattern (CBED) using a convolutional neural network (CNN). Subsequently, a corresponding patch of the phase object is recovered using the phase object approximation. Repeating this for each scan position in a 4D-STEM dataset and combining the patches by complex summation yields the full-phase object. Each patch is recovered from a kernel of 3x3 adjacent CBEDs only, which eliminates common, large memory requirements and enables live processing during an experiment.The CNN can retrieve phase information beyond the aperture angle, enabling super-resolution imaging. The image contrast formation shows a dependence on the thickness and atomic column type. Columns containing light and heavy elements can be imaged simultaneously and are distinguishable. The combination of super-resolution, good noise robustness, and intuitive image contrast characteristics makes the approach unique among live imaging methods in 4D-STEM.
+![concept](https://github.com/ThFriedrich/airpi/assets/47680554/1bffe569-ecf1-4a9a-8e86-71e89c2ba9d7)
 
 ## Cite
 If you use this method in your research, please cite:
